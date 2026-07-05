@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#E9EFEA">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<title>관측소 — macro-obs</title>
+<style>
+/* ── 해도(海圖) 토큰 ─────────────────────────────
+   paper 옅은 바다색 / ink 해도 잉크 / land 육지 버프
+   route 항로 마젠타(인터랙션) / danger 신호적(피해) / safe 해록(수혜) */
+:root{
+  --paper:#E9EFEA; --paper2:#DFE8E2; --land:#E7DFCB;
+  --ink:#1C2B33; --ink2:#51656C; --line:#A9BEB7;
+  --route:#A8447C; --danger:#B3372F; --safe:#2E6E5E;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:'Pretendard Variable',Pretendard,-apple-system,'Noto Sans KR',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+html{font-size:15px}
+body{
+  background:var(--paper) ;color:var(--ink);font-family:var(--sans);
+  /* 해도 격자: 옅은 측량선 */
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size:48px 48px;background-position:-1px -1px;
+  background-blend-mode:soft-light;
+  min-height:100vh;
+}
+header{
+  display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;
+  padding:.9rem 1.2rem .6rem;border-bottom:2px solid var(--ink);
+  background:linear-gradient(var(--paper) 70%, transparent);
+  position:sticky;top:0;z-index:5;
+}
+h1{font-size:1.05rem;font-weight:800;letter-spacing:.14em}
+h1 small{font-family:var(--mono);font-weight:400;color:var(--ink2);letter-spacing:0;margin-left:.5rem}
+nav{display:flex;gap:.2rem;margin-left:auto}
+nav a{
+  text-decoration:none;color:var(--ink2);font-size:.85rem;font-weight:600;
+  padding:.35rem .7rem;border:1px solid transparent;border-radius:2px;
+}
+nav a.on{color:var(--route);border-color:var(--route);background:#fff6}
+nav a:focus-visible{outline:2px solid var(--route);outline-offset:2px}
+main{padding:1.1rem 1.2rem 4rem;max-width:1080px;margin:0 auto}
+section{display:none}section.on{display:block}
+.grid{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.card{
+  background:#FDFDFB;border:1px solid var(--ink);border-radius:3px;
+  box-shadow:3px 3px 0 #1C2B3322;padding:.8rem .9rem;
+}
+.card h3{font-size:.82rem;font-weight:700;color:var(--ink2);letter-spacing:.02em}
+.big{font-family:var(--mono);font-size:1.7rem;font-weight:600;line-height:1.15;margin:.15rem 0 .3rem}
+.big small{font-size:.75rem;color:var(--ink2);font-weight:400}
+.chip{
+  display:inline-block;font-size:.68rem;font-weight:700;letter-spacing:.05em;
+  padding:.12rem .45rem;border-radius:2px;border:1px solid currentColor;vertical-align:middle;
+}
+.chip.in{color:var(--safe)}.chip.out{color:var(--danger)}.chip.na{color:var(--ink2)}
+.gauge{display:block;width:100%;height:64px;margin-top:.3rem}
+.meta{font-size:.72rem;color:var(--ink2);margin-top:.4rem;line-height:1.5}
+.list{margin-top:.9rem}
+.row{
+  background:#FDFDFB;border:1px solid var(--line);border-left:3px solid var(--danger);
+  padding:.55rem .8rem;margin-bottom:.45rem;font-size:.85rem;border-radius:2px;
+}
+.row b{font-family:var(--mono)}
+.muted{color:var(--ink2);font-size:.8rem}
+select,button{
+  font:inherit;font-size:.85rem;padding:.35rem .6rem;border:1px solid var(--ink);
+  background:#FDFDFB;border-radius:2px;color:var(--ink);
+}
+button{cursor:pointer;font-weight:600}
+button:hover{background:var(--land)}
+#chart{width:100%;height:auto;display:block;background:#FDFDFB;border:1px solid var(--ink);border-radius:3px;box-shadow:3px 3px 0 #1C2B3322}
+.legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.72rem;color:var(--ink2);margin:.5rem 0}
+.legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:.3rem}
+#panel{
+  margin-top:.8rem;background:var(--land);border:1px solid var(--ink);border-radius:3px;
+  padding:.8rem .9rem;font-size:.83rem;line-height:1.55;display:none;
+}
+#panel.on{display:block}
+#panel h4{font-size:.95rem;margin-bottom:.3rem}
+#panel .edge{margin:.4rem 0;padding-left:.7rem;border-left:2px solid var(--ink2)}
+#panel .edge.co{border-left-color:var(--route)}
+.note{color:var(--ink2)}
+.imp{font-family:var(--mono);font-weight:700}
+.imp.neg{color:var(--danger)}.imp.pos{color:var(--safe)}
+table{width:100%;border-collapse:collapse;font-size:.8rem;background:#FDFDFB;border:1px solid var(--ink)}
+th,td{padding:.45rem .6rem;border-bottom:1px solid var(--line);text-align:left}
+th{font-size:.7rem;letter-spacing:.06em;color:var(--ink2);border-bottom:1.5px solid var(--ink)}
+td.mono{font-family:var(--mono)}
+.score-hit{color:var(--safe);font-weight:700}.score-miss{color:var(--danger);font-weight:700}
+.score-partial{color:#8a6d1d;font-weight:700}.score-void,.score-manual{color:var(--ink2)}
+.scnrow{cursor:pointer}
+.scnrow:hover{background:var(--paper2)}
+.paths{display:none;background:var(--paper2)}
+.paths.on{display:table-row}
+.paths td{font-size:.78rem;line-height:1.6}
+footer{position:fixed;bottom:0;left:0;right:0;padding:.3rem 1.2rem;font-size:.68rem;color:var(--ink2);background:var(--paper);border-top:1px solid var(--line)}
+@media (prefers-reduced-motion:no-preference){
+  .card{transition:transform .12s}.card:hover{transform:translate(-1px,-1px)}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>관측소<small>macro-obs</small></h1>
+  <nav id="nav">
+    <a href="#dash">계기판</a><a href="#map">해도</a><a href="#scn">시나리오</a><a href="#track">기록</a><a href="#guide">안내</a>
+  </nav>
+</header>
+<main>
+  <section id="dash"><div class="grid" id="hyps"></div><div class="list" id="alerts"></div></section>
+
+  <section id="map">
+    <div class="legend">
+      <span><i style="background:var(--ink2)"></i>물리 경로 (공급/수요/경유)</span>
+      <span><i style="background:var(--route)"></i>정책·강압 경로 (감쇠 없음)</span>
+      <span>시나리오 오버레이: <select id="scnSel"><option value="">없음</option></select></span>
+    </div>
+    <svg id="chart" viewBox="0 0 1040 820" role="img" aria-label="의존성 해도"></svg>
+    <div id="panel"></div>
+  </section>
+
+  <section id="scn">
+    <p class="muted" style="margin-bottom:.6rem">이벤트가 터지면 분석이 아니라 조회를 한다. 행을 누르면 경로가 열린다 — 수치는 순위용 휴리스틱.</p>
+    <div id="scnList"></div>
+  </section>
+
+  <section id="track">
+    <div class="grid" id="rates"></div>
+    <div class="list"><table id="preds"><thead>
+      <tr><th>커밋일</th><th>지표</th><th>예측</th><th>목표일</th><th>실제</th><th>판정</th></tr>
+    </thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="guide">
+    <div class="card" style="max-width:720px;margin:0 auto;line-height:1.75;font-size:.88rem">
+      <h3 style="font-size:1rem;margin-bottom:.6rem">운영 동선 — 그리고 왜 이 순서인가</h3>
+
+      <p style="margin:.6rem 0"><b>① 알림은 텔레그램으로 온다.</b><br>
+      푸시가 필요한 사건은 하나뿐이다: 등록해둔 가설이 흔들리는 순간.
+      나머지 정보는 전부 이 관측소에서 당겨(pull) 본다.
+      알림이 안 온다는 건 세계가 네 가설 안에서 움직이고 있다는 뜻이므로, 조용함도 신호다.</p>
+
+      <p style="margin:.6rem 0"><b>② 조회는 관측소에서 한다.</b><br>
+      이벤트가 터졌을 때 하는 일은 분석이 아니라 <b>조회</b>다.
+      해도의 시나리오 오버레이는 평시에 미리 계산해둔 지도라서, 위기 시점의 흥분한 머리로
+      전달 경로를 처음부터 추론할 필요가 없다.
+      2020년 3월에 분석을 시작한 사람과 지도를 열어본 사람의 차이가 곧 결과의 차이였다.</p>
+
+      <p style="margin:.6rem 0"><b>③ 커밋은 다시 텔레그램에서 한다.</b><br>
+      알림은 "90일 뒤 이 지표가 어디 있을까"를 한 줄 커밋해야만 닫힌다.
+      확인 버튼으로 넘기는 길은 없앴다 — 판단을 적지 않으면 판단력이 측정되지 않고,
+      측정되지 않으면 나아지지 않기 때문이다. 커밋은 90일 뒤 자동 채점되어
+      기록 탭에 쌓인다. 회피(mute)도 기록된다. miss는 숨기지 않는다.</p>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:.9rem 0">
+      <h3 style="font-size:1rem;margin-bottom:.6rem">시스템과 사람의 분업</h3>
+      <p style="margin:.6rem 0">
+      시스템은 <b>사실과 사전계산</b>만 담당한다: 지표 수집, 밴드 이탈 감지, 공시 기반 노출,
+      그래프 전파. 사람은 <b>판단</b>만 주입한다: 가설의 밴드, 예측 커밋, 경합 경로 중 지배 경로 선택,
+      가설 수정의 근거.</p>
+      <p style="margin:.6rem 0" class="note">
+      그래서 해도의 수치는 정밀 추정치가 아니라 순위용 휴리스틱이고,
+      ⚔️ 경합(같은 노드에 수혜·피해 경로 공존)은 절대 합산하지 않는다 —
+      "이번엔 어느 경로가 작동하는 상황인가"가 바로 네가 주입할 판단이라서다.
+      밴드 참고치(/hyp ctx)도 분포의 기술이지 추천이 아니다.
+      분포를 그대로 베낀 밴드는 가설이 아니라 변동성 알림이 된다.</p>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:.9rem 0">
+      <h3 style="font-size:1rem;margin-bottom:.6rem">평시에 할 일</h3>
+      <p style="margin:.6rem 0">
+      가설이 흔들리지 않는 평시가 이 도구의 본 작업 시간이다:
+      해도의 간선 노트(경로·조건·지경학)를 현실에 맞게 손질하고,
+      시나리오의 weight를 무역 데이터로 검증하고,
+      침착할 때의 판단을 조건-액션(트리거)으로 미리 적어둔다.
+      위기 때의 나는 평시의 내가 시켜둔 일을 수행할 뿐이다.</p>
+
+      <p class="note" style="margin-top:.8rem">텔레그램 명령 요약은 봇에서 /guide 또는 /help.</p>
+    </div>
+  </section>
+</main>
+<footer>LAN·테일넷 전용 · 판단은 사람, 사실은 시스템</footer>
+
+<script>
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const j=u=>fetch(u).then(r=>r.json());
+const fmt=v=>v==null?'-':(Math.abs(v)>=1000?v.toLocaleString('ko-KR',{maximumFractionDigits:1}):Math.round(v*100)/100);
+
+/* ── 탭 ── */
+function route(){
+  const h=(location.hash||'#dash').slice(1);
+  document.querySelectorAll('main section').forEach(s=>s.classList.toggle('on',s.id===h));
+  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+h));
+  ({dash:loadDash,map:loadMap,scn:loadScn,track:loadTrack})[h]?.(); // guide는 정적
+}
+addEventListener('hashchange',route);
+
+/* ── 계기판: 밴드 채널 게이지 ── */
+async function loadDash(){
+  const st=await j('/api/status');
+  $('#hyps').innerHTML = st.hypotheses.length? '' :
+    '<div class="card"><h3>가설 없음</h3><p class="meta">scripts/seed-hypotheses.js 를 실행하라. 빈 계기판은 초대장이다.</p></div>';
+  for(const h of st.hypotheses){
+    const pos = h.latest==null?'na': h.latest>h.band_high?'out': h.latest<h.band_low?'out':'in';
+    const chip = pos==='in'?'<span class="chip in">밴드 내</span>':pos==='out'?'<span class="chip out">이탈</span>':'<span class="chip na">데이터 없음</span>';
+    const el=document.createElement('div'); el.className='card';
+    el.innerHTML=`<h3>${esc(h.indicator_name)}</h3>
+      <div class="big">${fmt(h.latest)}<small> ${esc(h.unit||'')} · ${esc(h.latest_date||'')}</small> ${chip}</div>
+      <svg class="gauge" viewBox="0 0 300 64" preserveAspectRatio="none" data-h="${h.id}"></svg>
+      <div class="meta">${esc(h.statement)}<br><span class="note">${esc(h.rationale)}</span></div>`;
+    $('#hyps').appendChild(el);
+    drawGauge(el.querySelector('svg'), h);
+  }
+  $('#alerts').innerHTML = st.open_alerts.map(a=>
+    `<div class="row">🔔 <b>${esc(a.indicator_name)}</b> ${a.direction==='above'?'상단 돌파':'하단 이탈'} — ${fmt(a.observed_value)} (${esc(a.observed_date)})
+     <span class="muted">텔레그램 알림에 답장으로 커밋해야 닫힌다</span></div>`).join('')
+    + (st.pending_predictions?`<p class="muted">채점 대기 예측 ${st.pending_predictions}건</p>`:'');
+}
+async function drawGauge(svg,h){
+  const obs=await j('/api/series/'+h.indicator_id+'?days=120');
+  if(!obs.length) return;
+  const vals=obs.map(o=>o.value), lo=Math.min(...vals,h.band_low), hi=Math.max(...vals,h.band_high);
+  const pad=(hi-lo)*0.12||1, y=v=>58-((v-(lo-pad))/((hi+pad)-(lo-pad)))*52;
+  const x=i=>6+(i/(obs.length-1||1))*288;
+  const line=obs.map((o,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(o.value).toFixed(1)}`).join('');
+  const last=obs[obs.length-1];
+  svg.innerHTML=`
+    <rect x="0" y="${y(h.band_high)}" width="300" height="${y(h.band_low)-y(h.band_high)}" fill="#2E6E5E18" stroke="#2E6E5E55" stroke-dasharray="3 3"/>
+    <text x="4" y="${y(h.band_high)-2}" font-size="8" fill="var(--ink2)" font-family="var(--mono)">${h.band_high}</text>
+    <text x="4" y="${y(h.band_low)+9}" font-size="8" fill="var(--ink2)" font-family="var(--mono)">${h.band_low}</text>
+    <path d="${line}" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+    <circle cx="${x(obs.length-1)}" cy="${y(last.value)}" r="3.2" fill="var(--route)"/>`;
+}
+
+/* ── 해도: 3열 레이어 그래프 ── */
+let G=null, SC=null;
+async function loadMap(){
+  if(!G) G=await j('/api/graph');
+  if(!SC){ SC=await j('/api/scenarios');
+    $('#scnSel').innerHTML='<option value="">없음</option>'+SC.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('#scnSel').onchange=()=>drawMap($('#scnSel').value);
+  }
+  drawMap($('#scnSel').value);
+}
+async function drawMap(scnId){
+  const cols={0:['chokepoint','relation'],1:['flow','macro'],2:['industry','firm']};
+  const colOf=t=>t==='flow'||t==='macro'?1:(t==='industry'||t==='firm')?2:0;
+  const byCol=[[],[],[]];
+  for(const n of G.nodes) byCol[colOf(n.type)].push(n);
+  const pos={}, W=1040,H=820, colX=[130,520,910];
+  byCol.forEach((list,c)=>list.forEach((n,i)=>{pos[n.id]={x:colX[c],y:60+(i+0.5)*((H-90)/list.length)}}));
+
+  let impacts={};
+  if(scnId){
+    const d=await j('/api/scenario/'+scnId);
+    for(const r of d.results){
+      const cur=impacts[r.node_id];
+      if(!cur||Math.abs(r.impact)>Math.abs(cur)) impacts[r.node_id]=r.impact;
+    }
+  }
+  const edgeSvg=G.edges.map(e=>{
+    const a=pos[e.src],b=pos[e.dst]; if(!a||!b)return'';
+    const co=e.kind==='coercion_transfer'||e.kind==='policy';
+    const mx=(a.x+b.x)/2;
+    return `<path d="M${a.x},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}"
+      fill="none" stroke="${co?'var(--route)':'var(--ink2)'}" stroke-width="${0.6+e.weight*1.6}"
+      stroke-opacity="${co?0.75:0.3}" ${co?'stroke-dasharray="6 4"':''}/>`;
+  }).join('');
+  const nodeSvg=G.nodes.map(n=>{
+    const p=pos[n.id], imp=impacts[n.id];
+    const fill = imp==null?'#FDFDFB': imp<0?`rgba(179,55,47,${Math.min(1,Math.abs(imp))*0.75+0.15})`:`rgba(46,110,94,${Math.min(1,imp)*0.75+0.15})`;
+    const tcol = imp!=null&&Math.abs(imp)>0.45?'#fff':'var(--ink)';
+    return `<g class="nd" data-id="${n.id}" style="cursor:pointer">
+      <rect x="${p.x-86}" y="${p.y-13}" width="172" height="26" rx="3" fill="${fill}" stroke="var(--ink)" stroke-width="1"/>
+      <text x="${p.x}" y="${p.y+4}" text-anchor="middle" font-size="11.5" fill="${tcol}" font-weight="600">${esc(n.name)}${imp!=null?` ${imp>0?'+':''}${imp.toFixed(2)}`:''}</text></g>`;
+  }).join('');
+  $('#chart').innerHTML=
+    `<text x="130" y="30" text-anchor="middle" font-size="11" letter-spacing="3" fill="var(--ink2)">초크포인트 · 관계</text>
+     <text x="520" y="30" text-anchor="middle" font-size="11" letter-spacing="3" fill="var(--ink2)">흐름</text>
+     <text x="910" y="30" text-anchor="middle" font-size="11" letter-spacing="3" fill="var(--ink2)">산업 · 거시</text>
+     ${edgeSvg}${nodeSvg}`;
+  document.querySelectorAll('.nd').forEach(g=>g.onclick=()=>showNode(Number(g.dataset.id)));
+}
+function showNode(id){
+  const n=G.nodes.find(x=>x.id===id);
+  const out=G.edges.filter(e=>e.src===id), inn=G.edges.filter(e=>e.dst===id);
+  const nm=i=>esc(G.nodes.find(x=>x.id===i)?.name||'?');
+  const li=(e,dir)=>`<div class="edge ${e.kind==='coercion_transfer'?'co':''}">
+    ${dir==='out'?`→ <b>${nm(e.dst)}</b>`:`← <b>${nm(e.src)}</b>`}
+    <span class="muted">(${e.kind}, w${e.weight}, ${e.sign>0?'동방향':'역방향'})</span><br>
+    ${esc(e.path_note)}${e.condition_note?`<br><span class="note">조건: ${esc(e.condition_note)}</span>`:''}
+    ${e.leverage_note?`<br><span class="note" style="color:var(--route)">지경학: ${esc(e.leverage_note)}</span>`:''}</div>`;
+  $('#panel').className='on';
+  let seasons='';
+  try{ const m=JSON.parse(n.meta_json||'null'); if(m?.seasons) seasons=`<p class="note" style="margin:.2rem 0 .4rem">계절성: ${esc(m.seasons)}</p>`; }catch{}
+  $('#panel').innerHTML=`<h4>${esc(n.name)} <span class="muted">(${n.type})</span></h4>${seasons}
+    ${out.map(e=>li(e,'out')).join('')}${inn.map(e=>li(e,'in')).join('')||''}
+    ${!out.length&&!inn.length?'<p class="muted">연결 간선 없음</p>':''}`;
+}
+
+/* ── 시나리오 ── */
+async function loadScn(){
+  const scs=await j('/api/scenarios'); if(!G) G=await j('/api/graph');
+  $('#scnList').innerHTML='';
+  for(const sc of scs){
+    const d=await j('/api/scenario/'+sc.id);
+    const byNode={};
+    for(const r of d.results){ (byNode[r.node_id]??=[]).push(r); }
+    const rows=Object.values(byNode).map(paths=>({
+      name:paths[0].name, paths,
+      maxAbs:Math.max(...paths.map(p=>Math.abs(p.impact))),
+      mixed:new Set(paths.map(p=>Math.sign(p.impact))).size>1
+    })).sort((a,b)=>b.maxAbs-a.maxAbs).slice(0,10);
+    const card=document.createElement('div'); card.className='card'; card.style.marginBottom='1rem';
+    card.innerHTML=`<h3>${esc(sc.name)}</h3><p class="meta">${esc(sc.trigger_hint||'')}</p>
+      <table><tbody>${rows.map((r,i)=>{
+        const top=r.paths.slice().sort((a,b)=>Math.abs(b.impact)-Math.abs(a.impact))[0];
+        const badge=r.mixed?'⚔️ 경합':'';
+        return `<tr class="scnrow" data-k="${sc.id}_${i}"><td>${esc(r.name)} ${badge}</td>
+          <td class="mono"><span class="imp ${top.impact<0?'neg':'pos'}">${top.impact>0?'+':''}${top.impact.toFixed(2)}</span></td></tr>
+          <tr class="paths" id="p${sc.id}_${i}"><td colspan="2">${r.paths.map(p=>pathHtml(p)).join('<hr style="border:none;border-top:1px dashed var(--line)">')}</td></tr>`;
+      }).join('')}</tbody></table>`;
+    $('#scnList').appendChild(card);
+  }
+  document.querySelectorAll('.scnrow').forEach(tr=>tr.onclick=()=>{
+    document.getElementById('p'+tr.dataset.k).classList.toggle('on');
+  });
+}
+function pathHtml(p){
+  const chain=p.path.map(eid=>{
+    const e=G.edges.find(x=>x.id===eid); if(!e)return'';
+    const nm=i=>esc(G.nodes.find(x=>x.id===i)?.name||'?');
+    return `<div class="edge ${e.kind==='coercion_transfer'?'co':''}">${nm(e.src)} → ${nm(e.dst)}: ${esc(e.path_note)}
+      ${e.condition_note?`<span class="note"> (조건: ${esc(e.condition_note)})</span>`:''}</div>`;
+  }).join('');
+  return `<span class="imp ${p.impact<0?'neg':'pos'}">${p.impact>0?'+':''}${p.impact.toFixed(2)}</span> · ${p.hops}홉${chain}`;
+}
+
+/* ── 기록 ── */
+async function loadTrack(){
+  const t=await j('/api/track');
+  const by={};
+  for(const r of t.rows){ (by[r.indicator_name]??={hit:0,partial:0,miss:0,void:0,manual:0})[r.score]=r.n; }
+  $('#rates').innerHTML=Object.entries(by).map(([name,s])=>{
+    const g=s.hit+s.partial+s.miss, rate=g?Math.round((s.hit+s.partial*0.5)/g*100):0;
+    return `<div class="card"><h3>${esc(name)}</h3><div class="big">${g?rate+'<small>%</small>':'—'}</div>
+      <div class="meta">hit ${s.hit} · partial ${s.partial} · miss ${s.miss}${s.void?` · void ${s.void}`:''}${s.manual?` · manual ${s.manual}`:''}</div></div>`;
+  }).join('')||'<div class="card"><h3>기록 없음</h3><p class="meta">첫 커밋 후 90일이면 여기가 채워진다. miss는 숨기지 않는다 — 그게 이 표의 존재 이유.</p></div>';
+  $('#preds tbody').innerHTML=t.predictions.map(p=>`<tr>
+    <td class="mono">${esc((p.committed_at||'').slice(0,10))}</td><td>${esc(p.indicator_name)}</td>
+    <td>${esc(p.statement)}</td><td class="mono">${esc(p.target_date)}</td>
+    <td class="mono">${fmt(p.actual_value)}</td>
+    <td class="score-${p.score||'void'}">${p.score||'대기'}</td></tr>`).join('');
+}
+
+route();
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+</script>
+</body>
+</html>

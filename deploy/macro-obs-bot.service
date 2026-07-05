@@ -12,7 +12,7 @@ Wants=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/macro-obs
-ExecStart=/usr/bin/node --no-warnings src/jobs/bot.js
+ExecStart=/usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/bot.js
 Restart=always
 RestartSec=10
 

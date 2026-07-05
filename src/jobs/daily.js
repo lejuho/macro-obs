@@ -1,13 +1,14 @@
 // 일일 배치: 수집 → 밴드 감시 → 알림 → 채점 → 재촉(nag) → (월요일) 주간 리포트
 // cron (하루 2회 — ECOS 반영 시차 흡수, 중복 실행 무해):
-//   0 9  * * *  cd /home/pi/macro_obs && /usr/bin/node --no-warnings src/jobs/daily.js >> log/daily.log 2>&1
-//   0 19 * * *  cd /home/pi/macro_obs && /usr/bin/node --no-warnings src/jobs/daily.js >> log/daily.log 2>&1
+//   0 9  * * *  cd /home/pi/macro-obs && /usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/daily.js >> log/daily.log 2>&1
+//   0 19 * * *  cd /home/pi/macro-obs && /usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/daily.js >> log/daily.log 2>&1
 
 const { collect } = require('../collectors/ecos');
 const { scan } = require('../watcher');
-const { send, formatBreach } = require('../notify/telegram');
-const { stmts } = require('../db');
+const { send, alertKeyboard, formatBreach } = require('../notify/telegram');
+const { db, stmts } = require('../db');
 const { grade, formatTrack } = require('../predictions');
+const { exposureSection, scenarioHints } = require('../exposure');
 
 async function main() {
   const t0 = Date.now();
@@ -24,7 +25,13 @@ async function main() {
 
   // 2. 밴드 감시 → 알림
   for (const b of scan()) {
-    const msg = await send(formatBreach(b));
+    const srcCode = db.prepare('SELECT source_code FROM indicators WHERE id = ?').get(b.hyp.indicator_id)?.source_code;
+    const extra = srcCode
+      ? [exposureSection(srcCode), scenarioHints(srcCode)].filter(Boolean).join('\n') || null
+      : null;
+    const msg = await send(formatBreach({ ...b, extra }), {
+      reply_markup: alertKeyboard(b.alert_id),
+    });
     if (msg.message_id) stmts.setAlertTgId.run(msg.message_id, b.alert_id);
     console.log(`  alert #${b.alert_id} sent`);
   }

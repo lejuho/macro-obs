@@ -84,7 +84,8 @@ assert(formatTrack([]).includes('아직'), 'empty track message');
 console.log('6. 마이그레이션 멱등성 (재실행 시 오류 없음)');
 // db.js를 다시 require해도 user_version 가드로 ALTER 중복 실행 안 됨 — 프로세스 재시작 시뮬레이션은
 // user_version 확인으로 대체
-assert(db.prepare('PRAGMA user_version').get().user_version === 1, 'user_version advanced once');
+const { MIGRATION_COUNT } = require('../src/db');
+assert(db.prepare('PRAGMA user_version').get().user_version === MIGRATION_COUNT, 'all migrations applied');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

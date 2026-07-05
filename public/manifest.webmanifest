@@ -1,0 +1,9 @@
+{
+  "name": "관측소 macro-obs",
+  "short_name": "관측소",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E9EFEA",
+  "theme_color": "#E9EFEA",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
