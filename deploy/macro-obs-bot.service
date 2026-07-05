@@ -1,0 +1,20 @@
+# 봇 데몬 systemd 유닛
+# 설치:
+#   sudo cp deploy/macro-obs-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now macro-obs-bot
+#   journalctl -u macro-obs-bot -f   # 로그
+[Unit]
+Description=macro-obs telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/macro-obs
+ExecStart=/usr/bin/node --no-warnings src/jobs/bot.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
