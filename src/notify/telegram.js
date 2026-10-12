@@ -16,11 +16,24 @@ async function telegram(method, body) {
   return json;
 }
 
-async function send(text, options = {}) {
-  const json = await telegram('sendMessage', {
-    chat_id: TG_CHAT_ID(), text, parse_mode: 'HTML',
-    disable_web_page_preview: true, ...options,
-  });
+/**
+ * options.event = { kind, data } — 이벤트 로그 메타 (텔레그램엔 안 보냄).
+ * 발송 성공/실패와 무관하게 events 테이블에 남는다 (DRY_RUN 제외). kind 생략 시 'message'.
+ */
+async function send(text, { event, ...options } = {}) {
+  const log = (delivered) => {
+    if (DRY_RUN) return;
+    const { record } = require('../events');
+    record({ kind: event?.kind || 'message', text, data: event?.data ?? null, delivered });
+  };
+  let json;
+  try {
+    json = await telegram('sendMessage', {
+      chat_id: TG_CHAT_ID(), text, parse_mode: 'HTML',
+      disable_web_page_preview: true, ...options,
+    });
+  } catch (e) { log(false); throw e; }
+  log(true);
   return json.result;
 }
 

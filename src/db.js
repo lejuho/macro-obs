@@ -7,6 +7,8 @@ const { DB_PATH } = require('./config');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
+// 여러 프로세스(cron 잡·bot·web)가 동시에 쓰므로 lock 시 즉시 실패하지 말고 대기
+db.exec('PRAGMA busy_timeout = 5000');
 db.exec(fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8'));
 
 // --- migrations ---
@@ -286,6 +288,62 @@ const MIGRATIONS = [
   );
   CREATE INDEX IF NOT EXISTS idx_worldview_observables_commit ON worldview_observables(commit_id);
   ALTER TABLE worldview_reviews ADD COLUMN quant_json TEXT DEFAULT '{}';
+  `,
+  // v?: 이벤트 로그 — 알림·판단·갱신을 외부 에이전트가 /api/events, MCP get_events로 폴링
+  `
+  CREATE TABLE IF NOT EXISTS events (
+    id         INTEGER PRIMARY KEY,
+    ts         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    source     TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    text       TEXT,
+    data_json  TEXT,
+    delivered  INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind, id);
+  CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+  `,
+  // OAuth 2.1 (MCP 원격 커넥터) + 외부 에이전트 보고서
+  `
+  CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id          TEXT PRIMARY KEY,
+    client_secret_hash TEXT,
+    client_name        TEXT,
+    redirect_uris_json TEXT NOT NULL,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+  CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash      TEXT PRIMARY KEY,
+    client_id      TEXT NOT NULL,
+    redirect_uri   TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    scope          TEXT,
+    resource       TEXT,
+    owner          TEXT,
+    expires_at     INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL CHECK (kind IN ('access','refresh')),
+    client_id   TEXT NOT NULL,
+    scope       TEXT,
+    owner       TEXT,
+    expires_at  INTEGER NOT NULL,
+    revoked     INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
+  CREATE TABLE IF NOT EXISTS reports (
+    id         INTEGER PRIMARY KEY,
+    ts         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    author     TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    event_ids_json TEXT,
+    since_id   INTEGER,
+    until_id   INTEGER,
+    meta_json  TEXT
+  );
   `,
 ];
 let v = db.prepare('PRAGMA user_version').get().user_version;

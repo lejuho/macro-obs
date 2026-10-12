@@ -98,13 +98,13 @@ const { id: alertId } = stmts.insertAlert.get({
   }).then((r) => r.json());
 
   let r = await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
-  assert(r.result.tools.length === TOOLS.length, 'HTTP 무인증: 읽기 전용');
+  assert(r.result.tools.length === TOOLS.length + 1, 'HTTP 무인증: 읽기 전용 (+get_reports)');
   r = await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'commit_prediction', arguments: { alert_id: 1, statement: '1' } } });
   assert(r.error?.code === -32602, 'HTTP 무인증 쓰기 호출 → unknown tool');
   r = await post({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, 'wrong-token-9999');
-  assert(r.result.tools.length === TOOLS.length, '틀린 토큰 → 읽기 전용');
+  assert(r.result.tools.length === TOOLS.length + 1, '틀린 토큰 → 읽기 전용');
   r = await post({ jsonrpc: '2.0', id: 4, method: 'tools/list' }, 'test-token-1234');
-  assert(r.result.tools.length === TOOLS.length + 3, '올바른 토큰 → 쓰기 포함');
+  assert(r.result.tools.length === TOOLS.length + 3 + 2, '올바른 토큰 → 쓰기 + 보고서 도구');
   server.close();
 
   console.log('7. origin 분리 트랙레코드');

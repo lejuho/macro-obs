@@ -470,3 +470,38 @@ MCP 경유 커밋·수정은 `origin='assisted'`, 텔레그램 직접 입력은 
 ## Phase 0의 완료 기준
 환율이 밴드를 벗어나면 폰이 울린다. 알림에는 가설 원문 + 등록 논리 + 커밋 요청이 담긴다.
 **Phase 1 완료 기준: 첫 예측이 커밋되고 90일 타이머가 돈다.**
+
+## 이벤트 로그 API (외부 에이전트 연동)
+
+텔레그램으로 나가는 모든 메시지와 배치 갱신을 `events` 테이블에 적재 (발송 실패해도 `delivered=0`으로 남음, DRY_RUN은 미기록).
+
+| kind | 출처 | data |
+|---|---|---|
+| `breach` | daily | alert_id, hypothesis_id, indicator, band, observed_value/date, direction |
+| `trigger` | daily | alert_id, trigger_id, name |
+| `grade` / `grade_request` | daily | prediction_id, expected, actual, score |
+| `track_weekly` | daily | 지표별 hit rate rows |
+| `worldview_review` | daily | worldview_id, review |
+| `news_cluster` | news | 쿼리별 클러스터 신규/갱신 수 |
+| `news_revisit` | news | cluster_id, title, review(T+90 채점) |
+| `message` | 그 외 (bot 응답·월간·분기 요약·재촉 등) | — |
+
+- HTTP: `GET http://<tailnet>:8787/api/events?since_id=N&kind=breach,grade&source=daily&since=2026-10-01&limit=100`
+  - `since_id` 주면 오래된 순 + `next_since_id` 반환 → 다음 폴링에 그대로 넘기면 중복/누락 없음
+- MCP: `get_events` (같은 인자) — `/mcp` HTTP 또는 stdio
+- 내부 판단을 추가로 남기려면: `require('./src/events').record({ kind, text, data })`
+- 인증 없음 — 웹서버와 같은 테일넷 전용 경계
+
+### 공인망 노출 (클라우드플레어 터널)
+터널 경유 요청(`Cf-Connecting-Ip` 헤더 또는 docker 브리지발)은 `Authorization: Bearer $PUBLIC_API_TOKEN` 필수,
+경로는 `/api/events`·`/api/track`·`/mcp`만, MCP는 `PUBLIC_MCP_TOOLS`(기본 get_events,get_track,search_news) 읽기 전용.
+토큰 미설정이면 전부 401. 테일넷/LAN은 기존대로 무인증. 앞단에 Cloudflare Access 서비스 토큰을 겹쳐 거는 것을 권장.
+
+### OAuth (원격 MCP 커넥터) + 보고서
+OAuth만 지원하는 에이전트용. `src/oauth.js` = 인가 서버(MCP Authorization 규격: 보호 리소스/AS 메타데이터, 동적 등록, PKCE S256, refresh 회전).
+- 커넥터 URL: `https://macro.lee-blog.me/mcp` → 401의 `WWW-Authenticate`로 자동 탐색
+- 승인 화면 `/oauth/authorize`는 Cloudflare Access(이메일 로그인) 뒤. 서버가 `Cf-Access-Jwt-Assertion`을 팀 공개키로 검증 + `OAUTH_OWNER_EMAIL` 일치 확인 (`src/cf-access.js`). env 미설정이면 승인 불가(fail closed)
+- 스코프: `macro.read`(get_events·get_track·search_news·get_reports) / `macro.report`(save_report). 가설·예측 쓰기 도구는 OAuth로 노출 안 함
+- 보고서: `reports` 테이블, author는 서버가 OAuth 클라이언트명으로 주입. 조회 `GET /api/reports`, MCP `get_reports`
+- 연결 끊기: `sqlite3 $DB_PATH "UPDATE oauth_tokens SET revoked=1 WHERE client_id='mo_...'"` (클라이언트 목록은 `oauth_clients`)
+- 테스트: `node --no-warnings test/oauth.test.js`

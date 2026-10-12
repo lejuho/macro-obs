@@ -5,6 +5,7 @@
 const { collect } = require('../collectors/naver');
 const { clusterQuery, revisitCluster, formatRevisit } = require('../news');
 const { send } = require('../notify/telegram');
+const { record } = require('../events');
 const { stmts } = require('../db');
 const QUERIES = require('../../data/news-queries');
 const AGENT = process.env.EXTRACT_AGENT === '1';
@@ -21,6 +22,7 @@ async function main() {
   for (const q of QUERIES) {
     const r = clusterQuery(q.query, undefined, { agent: AGENT });
     if (r.skip) continue;
+    record({ kind: 'news_cluster', data: r });
     console.log(r.ok
       ? `  cluster "${r.query}": 신규 ${r.created} · 갱신 ${r.updated} · noise ${r.noise}`
       : `  cluster "${r.query}": FAILED — ${r.reason}`);
@@ -32,7 +34,9 @@ async function main() {
     if (r.skip) continue;
     if (!r.ok) { console.log(`  revisit ${r.cluster}: FAILED — ${r.reason}`); continue; }
     console.log(`  revisit ${r.cluster}: ${r.verdicts} claims graded`);
-    await send(formatRevisit(c, r.data)).catch((e) => console.error('send:', e.message));
+    await send(formatRevisit(c, r.data), {
+      event: { kind: 'news_revisit', data: { cluster_id: c.id, title: c.title, review: r.data } },
+    }).catch((e) => console.error('send:', e.message));
   }
 
   console.log(`[${new Date().toISOString()}] news job done`);

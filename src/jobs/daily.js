@@ -42,6 +42,10 @@ async function main() {
       : null;
     const msg = await send(formatBreach({ ...b, extra }), {
       reply_markup: alertKeyboard(b.alert_id),
+      event: { kind: 'breach', data: {
+        alert_id: b.alert_id, hypothesis_id: b.hyp.id, indicator: b.hyp.indicator_name,
+        band: [b.hyp.band_low, b.hyp.band_high], ...b.breach,
+      } },
     });
     if (msg.message_id) stmts.setAlertTgId.run(msg.message_id, b.alert_id);
     console.log(`  alert #${b.alert_id} sent`);
@@ -49,7 +53,9 @@ async function main() {
 
   // 2.5 결정 트리거 평가 (스펙 §4.2)
   for (const f of scanTriggers()) {
-    const msg = await send(formatFired(f));
+    const msg = await send(formatFired(f), {
+      event: { kind: 'trigger', data: { alert_id: f.alert_id, trigger_id: f.trigger.id, name: f.trigger.name } },
+    });
     if (msg.message_id) stmts.setAlertTgId.run(msg.message_id, f.alert_id);
     console.log(`  trigger fired: #${f.trigger.id} ${f.trigger.name}`);
   }
@@ -68,7 +74,7 @@ async function main() {
         `현재 관측: ${obs ? `${obs.value} (${obs.date})` : '결측'}`,
         ``,
         `이 메시지에 답장: <code>hit</code> 또는 <code>miss</code>`,
-      ].join('\n'));
+      ].join('\n'), { event: { kind: 'grade_request', data: { prediction_id: p.id, indicator: p.indicator_name, observed: obs || null } } });
       if (msg.message_id) stmts.kvSet.run(`selfgrade_msg_${msg.message_id}`, String(p.id));
       // graded_at은 self-grade 답장 시점에 기록 (bot.js)
       console.log(`  pred #${p.id}: manual self-grade requested`);
@@ -82,7 +88,10 @@ async function main() {
       `${icon} <b>채점: ${g.score.toUpperCase()}</b> — ${esc(p.indicator_name)}`,
       `예측(${p.committed_at.slice(0, 10)}): "${esc(p.statement)}" [${p.expected_low}~${p.expected_high}]`,
       `실제(${p.target_date}): ${g.actual ?? '결측'}`,
-    ].join('\n'));
+    ].join('\n'), { event: { kind: 'grade', data: {
+      prediction_id: p.id, indicator: p.indicator_name, statement: p.statement,
+      expected: [p.expected_low, p.expected_high], target_date: p.target_date, actual: g.actual, score: g.score,
+    } } });
     console.log(`  pred #${p.id}: ${g.score}`);
   }
 
@@ -117,7 +126,7 @@ async function main() {
   if (new Date().getDay() === 1 && stmts.kvGet.get('weekly_report_last')?.value !== today) {
     const rows = stmts.trackRecord.all();
     if (rows.length) {
-      await send(formatTrack(rows));
+      await send(formatTrack(rows), { event: { kind: 'track_weekly', data: { rows } } });
       stmts.kvSet.run('weekly_report_last', today);
     }
   }
@@ -128,7 +137,9 @@ async function main() {
     const r = worldview.generateReview(dueView.id);
     if (!r.ok) console.error(`  worldview #${dueView.id} review FAILED — ${r.reason}`);
     else {
-      const msg = await send(worldview.formatReview(r.bundle.commit, r.data));
+      const msg = await send(worldview.formatReview(r.bundle.commit, r.data), {
+        event: { kind: 'worldview_review', data: { worldview_id: dueView.id, review: r.data } },
+      });
       stmts.setWorldviewReviewPending.run({ id: dueView.id, message_id: msg.message_id || null });
       if (msg.message_id) stmts.kvSet.run(`worldview_review_msg_${msg.message_id}`, String(dueView.id));
       console.log(`  worldview #${dueView.id}: review pending confirmation`);

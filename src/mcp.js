@@ -192,6 +192,24 @@ const TOOLS = [
       return { clusters, press_track: stmts.pressTrackAgg.all() };
     },
   },
+  {
+    name: 'get_events',
+    description: '이벤트 로그: 텔레그램 알림(breach/trigger/grade/news_revisit/worldview_review/track_weekly/message)과 배치 갱신(news_cluster). since_id로 커서 폴링 — 응답의 next_since_id를 다음 호출에 넘길 것.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since_id: { type: 'integer', description: '이 id 초과 이벤트만 (오래된 순)' },
+        since: { type: 'string', description: 'ISO 시각 이상 (예: 2026-10-01)' },
+        kind: { type: 'string', description: '콤마 구분 kind 필터' },
+        source: { type: 'string', description: '콤마 구분 source 필터 (daily,news,monthly,quarterly,bot)' },
+        limit: { type: 'integer', description: '기본 100, 최대 500' },
+      },
+      additionalProperties: false,
+    },
+    handler(args = {}) {
+      return require('./events').list(args);
+    },
+  },
 ];
 
 // ── JSON-RPC 처리 (팩토리 — 1층/2층 서버가 공유) ──

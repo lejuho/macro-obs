@@ -114,24 +114,107 @@ const api = {
   },
 };
 
+// --- 공인망(클라우드플레어 터널) 게이트 ---
+// 터널 경유 판별: CF가 항상 붙이는 Cf-Connecting-Ip 헤더, 또는 docker 브리지(172.16/12)발 접속(cloudflared 컨테이너).
+// 터널 요청 인증: PUBLIC_API_TOKEN(고정 Bearer) 또는 OAuth access token(src/oauth.js). 둘 다 아니면 401 + WWW-Authenticate.
+// 경로 화이트리스트 + MCP는 읽기 도구(+OAuth macro.report 스코프면 보고서 도구)만. OAuth 엔드포인트는 무인증 공개.
+// 테일넷/LAN/localhost 요청은 기존대로 무인증.
+const PUBLIC_PATHS = new Set(['/api/events', '/api/track', '/api/reports', '/mcp']);
+const DOCKER_NET = /^(::ffff:)?172\.(1[6-9]|2\d|3[01])\./;
+
+function isPublic(req) {
+  return !!req.headers['cf-connecting-ip'] || DOCKER_NET.test(req.socket.remoteAddress || '');
+}
+function tokenMatches(given, token) {
+  const crypto = require('crypto');
+  return !!token && given.length === token.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(token));
+}
+const bearer = (req) => (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+
+/** 공인망 요청 주체: { kind:'static' } | { kind:'oauth', client_id, scope, owner } | null */
+function publicAuth(req) {
+  const given = bearer(req);
+  if (tokenMatches(given, process.env.PUBLIC_API_TOKEN)) return { kind: 'static' };
+  const o = require('../oauth').verifyAccessToken(given);
+  return o ? { kind: 'oauth', ...o } : null;
+}
+/** 통과면 null, 아니면 [status, message] */
+function publicGate(req, pathname) {
+  if (!publicAuth(req)) return [401, 'unauthorized'];
+  if (!PUBLIC_PATHS.has(pathname)) return [403, 'forbidden'];
+  return null;
+}
+
+/** 요청 주체별 MCP 도구 세트 */
+function mcpToolset(req, pub) {
+  const { TOOLS } = require('../mcp');
+  const { WRITE_TOOLS } = require('../mcp-write-tools');
+  const { reportTools } = require('../mcp-report-tools');
+  const pubNames = (process.env.PUBLIC_MCP_TOOLS || 'get_events,get_track,search_news').split(',').map((t) => t.trim());
+  const pubRead = TOOLS.filter((t) => pubNames.includes(t.name));
+  if (pub) {
+    const who = publicAuth(req);
+    if (who.kind === 'static') return pubRead;
+    const scopes = who.scope.split(' ');
+    const client = db.prepare('SELECT client_name FROM oauth_clients WHERE client_id = ?').get(who.client_id);
+    const author = `oauth:${client?.client_name || who.client_id}`;
+    const reports = reportTools(author);
+    return [
+      ...(scopes.includes('macro.read') ? [...pubRead, reports.find((t) => t.name === 'get_reports')] : []),
+      ...(scopes.includes('macro.report') ? reports.filter((t) => t.name === 'save_report') : []),
+    ];
+  }
+  // 로컬: 쓰기 도구는 MCP_WRITE_TOKEN 일치 시에만 (토큰 미설정 = HTTP 항상 읽기 전용)
+  const authed = tokenMatches(bearer(req), process.env.MCP_WRITE_TOKEN);
+  const reports = reportTools('local');
+  return authed ? [...TOOLS, ...WRITE_TOOLS, ...reports] : [...TOOLS, reports.find((t) => t.name === 'get_reports')];
+}
+
 function handle(req, res) {
   const url = new URL(req.url, 'http://x');
+  // 공인망 접근 로그 (토큰·쿼리 값은 남기지 않음 — 키 이름만)
+  if (isPublic(req)) {
+    const t0 = Date.now();
+    res.on('finish', () => console.log(`[pub] ${req.method} ${url.pathname}${url.search ? ' ?' + [...url.searchParams.keys()].join(',') : ''} → ${res.statusCode} ${Date.now() - t0}ms auth=${req.headers.authorization ? req.headers.authorization.split(' ')[0] : '-'} ua=${(req.headers['user-agent'] || '').slice(0, 60)}`));
+  }
 
-  // MCP Streamable HTTP (테일넷 전용 — 웹서버와 같은 보안 경계)
-  // 읽기는 무인증, 쓰기 도구는 MCP_WRITE_TOKEN 헤더 일치 시에만 노출 (토큰 미설정 = HTTP 항상 읽기 전용)
+  // OAuth 인가 서버 + 메타데이터 (공개 — 승인 화면은 내부에서 Cloudflare Access JWT 검증)
+  if (require('../oauth').handle(req, res, url)) return;
+
+  const pub = isPublic(req);
+  if (pub) {
+    if (req.method === 'OPTIONS' && url.pathname === '/mcp') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id',
+      });
+      return res.end();
+    }
+    const denied = publicGate(req, url.pathname);
+    if (denied) {
+      res.writeHead(denied[0], {
+        'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+        ...(denied[0] === 401 ? { 'WWW-Authenticate': require('../oauth').wwwAuthenticate() } : {}),
+      });
+      return res.end(JSON.stringify({ error: denied[1] }));
+    }
+  }
+
+  // MCP Streamable HTTP (JSON 응답 모드, 세션 없음)
   if (url.pathname === '/mcp') {
-    if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+    if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }).end(); return; }
     let body = '';
-    req.on('data', (c) => { body += c; });
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 1024 * 1024) { res.writeHead(413).end(); req.destroy(); return; }
+      body += c;
+    });
     req.on('end', async () => {
-      const { createHandler, TOOLS } = require('../mcp');
-      const { WRITE_TOOLS } = require('../mcp-write-tools');
-      const crypto = require('crypto');
-      const token = process.env.MCP_WRITE_TOKEN;
-      const given = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-      const authed = !!token && given.length === token.length &&
-        crypto.timingSafeEqual(Buffer.from(given), Buffer.from(token));
-      const handleRpc = createHandler(authed ? [...TOOLS, ...WRITE_TOOLS] : TOOLS);
+      if (res.writableEnded) return;
+      const { createHandler } = require('../mcp');
+      const handleRpc = createHandler(mcpToolset(req, pub));
       let msg;
       try { msg = JSON.parse(body); }
       catch {
@@ -140,7 +223,7 @@ function handle(req, res) {
       }
       const out = await handleRpc(msg);
       if (!out) { res.writeHead(202).end(); return; } // notification
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', ...(pub ? { 'Access-Control-Allow-Origin': '*' } : {}) });
       res.end(JSON.stringify(out));
     });
     return;
@@ -156,6 +239,13 @@ function handle(req, res) {
     if ((m = url.pathname.match(/^\/api\/series\/(\d+)$/)))
       return send(200, api.series(m[1], Number(url.searchParams.get('days') || 365)));
     if (url.pathname === '/api/track') return send(200, api.track());
+    if (url.pathname === '/api/reports') {
+      return send(200, { reports: require('../mcp-report-tools').listReports(Object.fromEntries(url.searchParams)) });
+    }
+    if (url.pathname === '/api/events') {
+      const q = Object.fromEntries(url.searchParams);
+      return send(200, require('../events').list(q));
+    }
     if (url.pathname === '/api/graph') return send(200, api.graph());
     if (url.pathname === '/api/scenarios') return send(200, api.scenarios());
     if (url.pathname === '/api/worldview/current') {
@@ -191,4 +281,4 @@ if (require.main === module) {
   createServer();
   console.log(`[${new Date().toISOString()}] web server on :${PORT} (LAN/테일넷 전용 — 공인망 노출 금지)`);
 }
-module.exports = { createServer, api };
+module.exports = { createServer, api, isPublic, publicGate };

@@ -83,7 +83,7 @@ const { createServer } = require('../src/jobs/server');
   });
   let res = await post({ jsonrpc: '2.0', id: 9, method: 'tools/list' });
   const json = await res.json();
-  assert(res.status === 200 && json.result.tools.length === TOOLS.length, 'POST /mcp tools/list');
+  assert(res.status === 200 && json.result.tools.length === TOOLS.length + 1, 'POST /mcp tools/list (읽기 + get_reports)');
   res = await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
   assert(res.status === 202, 'notification → 202');
   res = await fetch(base + '/mcp');
