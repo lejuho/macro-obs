@@ -65,19 +65,32 @@ function grade(pred, obs, targetDateStr) {
   return { score: 'miss', actual: value };
 }
 
-/** 트랙레코드 rows [{indicator_name, score, n}] → 텍스트 요약 */
+/** 트랙레코드 rows [{indicator_name, origin?, score, n}] → 텍스트 요약. origin 혼재 시 분리 집계 표시 */
 function formatTrack(rows) {
   if (!rows.length) return '아직 채점된 예측이 없다. (첫 커밋 후 90일)';
-  const by = {};
+  const zero = () => ({ hit: 0, partial: 0, miss: 0, void: 0, manual: 0 });
+  const by = {}, byOrigin = {};
   for (const r of rows) {
-    by[r.indicator_name] ??= { hit: 0, partial: 0, miss: 0, void: 0, manual: 0 };
-    by[r.indicator_name][r.score] = r.n;
+    (by[r.indicator_name] ??= zero())[r.score] += r.n;
+    if (r.origin) (byOrigin[r.origin] ??= zero())[r.score] += r.n;
   }
+  const rateOf = (s) => {
+    const graded = s.hit + s.partial + s.miss;
+    return graded ? Math.round(((s.hit + s.partial * 0.5) / graded) * 100) : null;
+  };
   const lines = ['📊 <b>캘리브레이션 트랙레코드</b>', ''];
   for (const [name, s] of Object.entries(by)) {
-    const graded = s.hit + s.partial + s.miss;
-    const rate = graded ? Math.round(((s.hit + s.partial * 0.5) / graded) * 100) : 0;
+    const rate = rateOf(s) ?? 0;
     lines.push(`<b>${name}</b>: ${rate}%  (hit ${s.hit} · partial ${s.partial} · miss ${s.miss}${s.void ? ` · void ${s.void}` : ''}${s.manual ? ` · manual ${s.manual}` : ''})`);
+  }
+  // origin 실험: human/assisted 둘 다 채점본이 있을 때만 표시
+  const origins = Object.keys(byOrigin);
+  if (origins.includes('human') && origins.includes('assisted')) {
+    lines.push('', '<b>origin 실험</b> (단독 vs Claude 협의):');
+    for (const o of ['human', 'assisted']) {
+      const s = byOrigin[o], rate = rateOf(s);
+      lines.push(`· ${o === 'human' ? '🧠 human' : '🤝 assisted'}: ${rate != null ? rate + '%' : '—'} (hit ${s.hit} · partial ${s.partial} · miss ${s.miss})`);
+    }
   }
   lines.push('', 'miss는 숨기지 않는다 — 그게 이 표의 존재 이유.');
   return lines.join('\n');

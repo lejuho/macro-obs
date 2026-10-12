@@ -20,7 +20,7 @@ function assert(cond, name) {
 // --- 셋업: 가짜 환율 indicator + 가설 ---
 const { id: indId } = stmts.upsertIndicator.get({
   source: 'ecos', source_code: 'TEST/usdkrw', name: '테스트 환율',
-  freq: 'D', unit: 'KRW/USD', category: 'macro',
+  freq: 'D', unit: 'KRW/USD', category: 'macro', note: null,
 });
 db.prepare(`INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, window_rule, rationale)
   VALUES ('테스트 뉴노멀 1350~1480', ?, 1350, 1480, 'close_3', '테스트 근거')`).run(indId);
@@ -50,6 +50,20 @@ assert(breaches[0].breach.observed_value === 1495, 'latest value reported');
 
 console.log('4. 쿨다운 내 재스캔 → 중복 알림 없음');
 assert(scan().length === 0, 'cooldown suppresses duplicate');
+
+const alertId = breaches[0].alert_id;
+stmts.insertPrediction.get({
+  alert_id: alertId, statement: '1440~1570', expected_low: 1440, expected_high: 1570,
+  target_date: '2026-10-01',
+});
+stmts.setAlertStatus.run('committed', alertId);
+db.prepare(`UPDATE alerts SET triggered_at = datetime('now', '-8 day') WHERE id = ?`).run(alertId);
+assert(scan().length === 0, 'pending same-direction prediction suppresses reminder');
+
+setObs([1345, 1340, 1335]);
+const opposite = scan();
+assert(opposite.length === 1 && opposite[0].breach.direction === 'below',
+  'opposite-direction breach still fires');
 
 console.log('5. judge 순수함수: 하단 이탈');
 const j = judge(

@@ -50,8 +50,9 @@ section{display:none}section.on{display:block}
 .grid{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
 .card{
   background:#FDFDFB;border:1px solid var(--ink);border-radius:3px;
-  box-shadow:3px 3px 0 #1C2B3322;padding:.8rem .9rem;
+  box-shadow:3px 3px 0 #1C2B3322;padding:.8rem .9rem;position:relative;
 }
+.flags{position:absolute;top:.55rem;right:.7rem;font-size:.68rem;color:var(--ink2);letter-spacing:.02em}
 .card h3{font-size:.82rem;font-weight:700;color:var(--ink2);letter-spacing:.02em}
 .big{font-family:var(--mono);font-size:1.7rem;font-weight:600;line-height:1.15;margin:.15rem 0 .3rem}
 .big small{font-size:.75rem;color:var(--ink2);font-weight:400}
@@ -60,6 +61,11 @@ section{display:none}section.on{display:block}
   padding:.12rem .45rem;border-radius:2px;border:1px solid currentColor;vertical-align:middle;
 }
 .chip.in{color:var(--safe)}.chip.out{color:var(--danger)}.chip.na{color:var(--ink2)}
+.cycle{margin-bottom:.9rem;border-left:5px solid var(--route)}
+.cycle-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin:.15rem 0 .65rem}
+.cycle-head strong{font-size:1.35rem}.cycle-signals{display:flex;gap:.45rem;flex-wrap:wrap}
+.cycle-signal{border:1px solid var(--line);background:var(--paper2);padding:.35rem .55rem;border-radius:2px;font-size:.78rem}
+.cycle-signal b{font-family:var(--mono);margin-left:.2rem}.cycle-signal small{display:block;color:var(--ink2);margin-top:.1rem}
 .gauge{display:block;width:100%;height:64px;margin-top:.3rem}
 .meta{font-size:.72rem;color:var(--ink2);margin-top:.4rem;line-height:1.5}
 .list{margin-top:.9rem}
@@ -76,6 +82,12 @@ select,button{
 button{cursor:pointer;font-weight:600}
 button:hover{background:var(--land)}
 #chart{width:100%;height:auto;display:block;background:#FDFDFB;border:1px solid var(--ink);border-radius:3px;box-shadow:3px 3px 0 #1C2B3322}
+.node-label{
+  paint-order:stroke fill;
+  stroke-width:3px;
+  stroke-linejoin:round;
+  stroke-linecap:round;
+}
 .legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.72rem;color:var(--ink2);margin:.5rem 0}
 .legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:.3rem}
 #panel{
@@ -86,6 +98,7 @@ button:hover{background:var(--land)}
 #panel h4{font-size:.95rem;margin-bottom:.3rem}
 #panel .edge{margin:.4rem 0;padding-left:.7rem;border-left:2px solid var(--ink2)}
 #panel .edge.co{border-left-color:var(--route)}
+.viewnote{padding:.45rem .65rem;margin:.45rem 0;background:#fff9;border:1px solid var(--route);font-size:.78rem;line-height:1.45}
 .note{color:var(--ink2)}
 .imp{font-family:var(--mono);font-weight:700}
 .imp.neg{color:var(--danger)}.imp.pos{color:var(--safe)}
@@ -114,7 +127,14 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:.3rem 1.2rem;font-size:.68
   </nav>
 </header>
 <main>
-  <section id="dash"><div class="grid" id="hyps"></div><div class="list" id="alerts"></div></section>
+  <section id="dash">
+    <div id="cycle"></div>
+    <div class="grid" id="hyps"></div>
+    <div class="list" id="alerts"></div>
+    <p class="muted" id="elecline" style="margin:.8rem 0 0"></p>
+    <h3 class="muted" style="margin:1.1rem 0 .5rem;letter-spacing:.08em">관찰 지표 — 가설 없음 · 알림 없음 · 눈금만</h3>
+    <div class="grid" id="watch"></div>
+  </section>
 
   <section id="map">
     <div class="legend">
@@ -122,6 +142,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:.3rem 1.2rem;font-size:.68
       <span><i style="background:var(--route)"></i>정책·강압 경로 (감쇠 없음)</span>
       <span>시나리오 오버레이: <select id="scnSel"><option value="">없음</option></select></span>
     </div>
+    <div id="viewnote"></div>
     <svg id="chart" viewBox="0 0 1040 820" role="img" aria-label="의존성 해도"></svg>
     <div id="panel"></div>
   </section>
@@ -191,6 +212,9 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:.3rem 1.2rem;font-size:.68
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const j=u=>fetch(u).then(r=>r.json());
 const fmt=v=>v==null?'-':(Math.abs(v)>=1000?v.toLocaleString('ko-KR',{maximumFractionDigits:1}):Math.round(v*100)/100);
+const NAMES={KR:'한국',US:'미국',CN:'중국',JP:'일본',TW:'대만',EU:'유럽',IR:'이란',SA:'사우디',AE:'UAE',EG:'이집트',YE:'예멘'};
+const flagOf=c=>c==='EU'?'🇪🇺':[...c].map(x=>String.fromCodePoint(0x1f1e6+x.charCodeAt(0)-65)).join('');
+const flagLabel=(ccs,names=true)=>(ccs||[]).map(c=>names?`${flagOf(c)} ${NAMES[c]||c}`:flagOf(c)).join(names?' · ':'');
 
 /* ── 탭 ── */
 function route(){
@@ -204,23 +228,50 @@ addEventListener('hashchange',route);
 /* ── 계기판: 밴드 채널 게이지 ── */
 async function loadDash(){
   const st=await j('/api/status');
+  const c=st.cycle;
+  $('#cycle').innerHTML=c?.available?`<div class="card cycle">
+    <h3>현재 경기 흐름</h3>
+    <div class="cycle-head"><strong>${esc(c.label)}</strong><span class="chip ${(c.label.includes('둔화')||c.qualifier.includes('둔화')||c.qualifier.includes('부담 확대'))?'out':'in'}">${esc(c.qualifier)}</span><span class="muted">기준 ${esc(c.as_of?.slice(0,7))}</span></div>
+    <div class="cycle-signals">${c.signals.map(s=>`<div class="cycle-signal">${esc(s.label)} <b>${esc(s.display)}</b><small>${esc(s.detail)}</small></div>`).join('')}</div>
+    <div class="meta">YoY 수준과 최근 3개월 모멘텀, 제조업 재고율 변화를 합성한 방향판입니다. 공식 경기종합지수나 예측 모델이 아닙니다.</div>
+  </div>`:'';
   $('#hyps').innerHTML = st.hypotheses.length? '' :
     '<div class="card"><h3>가설 없음</h3><p class="meta">scripts/seed-hypotheses.js 를 실행하라. 빈 계기판은 초대장이다.</p></div>';
   for(const h of st.hypotheses){
     const pos = h.latest==null?'na': h.latest>h.band_high?'out': h.latest<h.band_low?'out':'in';
     const chip = pos==='in'?'<span class="chip in">밴드 내</span>':pos==='out'?'<span class="chip out">이탈</span>':'<span class="chip na">데이터 없음</span>';
     const el=document.createElement('div'); el.className='card';
-    el.innerHTML=`<h3>${esc(h.indicator_name)}</h3>
+    el.innerHTML=`${h.flags?.length?`<div class="flags">${flagLabel(h.flags)}</div>`:''}<h3>${esc(h.indicator_name)}</h3>
       <div class="big">${fmt(h.latest)}<small> ${esc(h.unit||'')} · ${esc(h.latest_date||'')}</small> ${chip}</div>
       <svg class="gauge" viewBox="0 0 300 64" preserveAspectRatio="none" data-h="${h.id}"></svg>
       <div class="meta">${esc(h.statement)}<br><span class="note">${esc(h.rationale)}</span></div>`;
     $('#hyps').appendChild(el);
     drawGauge(el.querySelector('svg'), h);
   }
+  $('#elecline').innerHTML = (st.elections||[]).map(e=>
+    `🗳 ${esc(e.country)} ${esc(e.body)} <b>D-${e.dday}</b> (${e.date})`).join(' &nbsp;·&nbsp; ') || '';
+  $('#watch').innerHTML = (st.watch||[]).map(w=>`<div class="card">
+      ${w.flags?.length?`<div class="flags">${flagLabel(w.flags)}</div>`:''}
+      <h3>${esc(w.name)}</h3>
+      <div class="big">${fmt(w.latest)}<small> ${esc(w.unit||'')} · ${esc(w.latest_date||'')}</small></div>
+      <svg class="gauge" viewBox="0 0 300 64" preserveAspectRatio="none" data-w="${w.id}"></svg>
+      ${w.note?`<div class="meta note">${esc(w.note)}</div>`:''}
+    </div>`).join('');
+  for(const w of (st.watch||[])) drawSpark(document.querySelector(`svg[data-w="${w.id}"]`), w.id);
   $('#alerts').innerHTML = st.open_alerts.map(a=>
     `<div class="row">🔔 <b>${esc(a.indicator_name)}</b> ${a.direction==='above'?'상단 돌파':'하단 이탈'} — ${fmt(a.observed_value)} (${esc(a.observed_date)})
      <span class="muted">텔레그램 알림에 답장으로 커밋해야 닫힌다</span></div>`).join('')
     + (st.pending_predictions?`<p class="muted">채점 대기 예측 ${st.pending_predictions}건</p>`:'');
+}
+async function drawSpark(svg,indId){
+  const obs=await j('/api/series/'+indId+'?days=120');
+  if(!obs.length||!svg) return;
+  const vals=obs.map(o=>o.value), lo=Math.min(...vals), hi=Math.max(...vals);
+  const pad=(hi-lo)*0.12||1, y=v=>58-((v-(lo-pad))/((hi+pad)-(lo-pad)))*52;
+  const x=i=>6+(i/(obs.length-1||1))*288;
+  const line=obs.map((o,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(o.value).toFixed(1)}`).join('');
+  svg.innerHTML=`<path d="${line}" fill="none" stroke="var(--ink2)" stroke-width="1.2"/>
+    <circle cx="${x(obs.length-1)}" cy="${y(obs[obs.length-1].value)}" r="3" fill="var(--route)"/>`;
 }
 async function drawGauge(svg,h){
   const obs=await j('/api/series/'+h.indicator_id+'?days=120');
@@ -239,12 +290,18 @@ async function drawGauge(svg,h){
 }
 
 /* ── 해도: 3열 레이어 그래프 ── */
-let G=null, SC=null;
+let G=null, SC=null, WV=null;
 async function loadMap(){
   if(!G) G=await j('/api/graph');
+  try{
+    const candidate=await j('/api/worldview/current');
+    WV=candidate?.commit&&Array.isArray(candidate.paths)?candidate:null;
+  }catch{WV=null}
   if(!SC){ SC=await j('/api/scenarios');
-    $('#scnSel').innerHTML='<option value="">없음</option>'+SC.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('#scnSel').innerHTML='<option value="">없음</option>'+(WV?`<option value="view">🧭 현재 관점 #${WV.commit.id}</option>`:'')+SC.map(s=>`<option value="${s.id}">${esc(s.name)}${s.flags?.length?' '+flagLabel(s.flags,false):''}</option>`).join('');
     $('#scnSel').onchange=()=>drawMap($('#scnSel').value);
+  }else if(WV&&!$('#scnSel option[value="view"]')){
+    $('#scnSel').insertAdjacentHTML('afterbegin',`<option value="view">🧭 현재 관점 #${WV.commit.id}</option>`);
   }
   drawMap($('#scnSel').value);
 }
@@ -256,29 +313,50 @@ async function drawMap(scnId){
   const pos={}, W=1040,H=820, colX=[130,520,910];
   byCol.forEach((list,c)=>list.forEach((n,i)=>{pos[n.id]={x:colX[c],y:60+(i+0.5)*((H-90)/list.length)}}));
 
-  let impacts={};
-  if(scnId){
+  let impacts={}, impactSets={}, activeEdges=new Set();
+  if(scnId==='view'&&WV){
+    for(const r of WV.paths){
+      (impactSets[r.node_id]??=[]).push(r);
+      r.path.forEach(id=>activeEdges.add(id));
+    }
+    for(const s of WV.scenarios) for(const shock of (s.shocks||[])){
+      const n=G.nodes.find(x=>x.name===shock.node); if(!n)continue;
+      (impactSets[n.id]??=[]).push({impact:shock.impact??-1,scenario_id:s.scenario_id,scenario_name:s.name});
+    }
+    for(const [id,rs] of Object.entries(impactSets)) impacts[id]=rs.slice().sort((a,b)=>Math.abs(b.impact)-Math.abs(a.impact))[0].impact;
+    const q=WV.review?.quantitative;
+    $('#viewnote').innerHTML=`<div class="viewnote"><b>현재 관점 #${WV.commit.id}</b> ${esc(WV.commit.thesis)}<br>${WV.scenarios.map(s=>`${s.role==='primary'?'●':'○'} ${esc(s.name)}`).join(' · ')} · 판정일 ${WV.commit.target_date}${q?`<br><b>선택 ${q.scenario_selection_fit_pct??'—'}%</b> · 전달 ${q.transmission_score??'—'} · 실측방향 ${q.observable_direction_score??'—'} · 관측범위 ${q.observable_coverage_pct}%`:''}</div>`;
+  }else if(scnId){
     const d=await j('/api/scenario/'+scnId);
     for(const r of d.results){
       const cur=impacts[r.node_id];
-      if(!cur||Math.abs(r.impact)>Math.abs(cur)) impacts[r.node_id]=r.impact;
+      if(cur==null||Math.abs(r.impact)>Math.abs(cur)) impacts[r.node_id]=r.impact;
+      r.path.forEach(id=>activeEdges.add(id));
     }
+    try{for(const shock of JSON.parse(d.scenario.shocks_json||'[]')){const n=G.nodes.find(x=>x.name===shock.node);if(n)impacts[n.id]=shock.impact??-1}}catch{}
+    $('#viewnote').innerHTML='';
+  }else{
+    $('#viewnote').innerHTML='';
   }
   const edgeSvg=G.edges.map(e=>{
     const a=pos[e.src],b=pos[e.dst]; if(!a||!b)return'';
     const co=e.kind==='coercion_transfer'||e.kind==='policy';
+    const active=activeEdges.has(e.id), overlay=!!scnId;
     const mx=(a.x+b.x)/2;
     return `<path d="M${a.x},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}"
-      fill="none" stroke="${co?'var(--route)':'var(--ink2)'}" stroke-width="${0.6+e.weight*1.6}"
-      stroke-opacity="${co?0.75:0.3}" ${co?'stroke-dasharray="6 4"':''}/>`;
+      fill="none" stroke="${co?'var(--route)':'var(--ink2)'}" stroke-width="${0.6+e.weight*1.6+(active?1:0)}"
+      stroke-opacity="${overlay?(active?0.9:0.07):(co?0.75:0.3)}" ${co?'stroke-dasharray="6 4"':''}/>`;
   }).join('');
   const nodeSvg=G.nodes.map(n=>{
     const p=pos[n.id], imp=impacts[n.id];
+    const set=impactSets[n.id]||[], conflict=new Set(set.map(x=>Math.sign(x.impact))).size>1;
+    const scenarioCount=new Set(set.map(x=>x.scenario_id)).size;
     const fill = imp==null?'#FDFDFB': imp<0?`rgba(179,55,47,${Math.min(1,Math.abs(imp))*0.75+0.15})`:`rgba(46,110,94,${Math.min(1,imp)*0.75+0.15})`;
     const tcol = imp!=null&&Math.abs(imp)>0.45?'#fff':'var(--ink)';
+    const halo = tcol==='#fff'?'rgba(28,43,51,.9)':'rgba(253,253,251,.94)';
     return `<g class="nd" data-id="${n.id}" style="cursor:pointer">
       <rect x="${p.x-86}" y="${p.y-13}" width="172" height="26" rx="3" fill="${fill}" stroke="var(--ink)" stroke-width="1"/>
-      <text x="${p.x}" y="${p.y+4}" text-anchor="middle" font-size="11.5" fill="${tcol}" font-weight="600">${esc(n.name)}${imp!=null?` ${imp>0?'+':''}${imp.toFixed(2)}`:''}</text></g>`;
+      <text class="node-label" x="${p.x}" y="${p.y+4}" text-anchor="middle" font-size="11.5" fill="${tcol}" stroke="${halo}" font-weight="650">${conflict?'⚔️ ':''}${esc(n.name)}${n.flags?.length?' '+flagLabel(n.flags,false):''}${imp!=null?` ${imp>0?'+':''}${imp.toFixed(2)}`:''}${scenarioCount>1?` ×${scenarioCount}`:''}</text></g>`;
   }).join('');
   $('#chart').innerHTML=
     `<text x="130" y="30" text-anchor="middle" font-size="11" letter-spacing="3" fill="var(--ink2)">초크포인트 · 관계</text>
@@ -293,13 +371,13 @@ function showNode(id){
   const nm=i=>esc(G.nodes.find(x=>x.id===i)?.name||'?');
   const li=(e,dir)=>`<div class="edge ${e.kind==='coercion_transfer'?'co':''}">
     ${dir==='out'?`→ <b>${nm(e.dst)}</b>`:`← <b>${nm(e.src)}</b>`}
-    <span class="muted">(${e.kind}, w${e.weight}, ${e.sign>0?'동방향':'역방향'})</span><br>
+    <span class="muted">(${e.kind}, w${e.weight}${e.hhi?`, HHI ${Math.round(e.hhi*100)/100}`:''}, ${e.sign>0?'동방향':'역방향'})</span><br>
     ${esc(e.path_note)}${e.condition_note?`<br><span class="note">조건: ${esc(e.condition_note)}</span>`:''}
     ${e.leverage_note?`<br><span class="note" style="color:var(--route)">지경학: ${esc(e.leverage_note)}</span>`:''}</div>`;
   $('#panel').className='on';
   let seasons='';
   try{ const m=JSON.parse(n.meta_json||'null'); if(m?.seasons) seasons=`<p class="note" style="margin:.2rem 0 .4rem">계절성: ${esc(m.seasons)}</p>`; }catch{}
-  $('#panel').innerHTML=`<h4>${esc(n.name)} <span class="muted">(${n.type})</span></h4>${seasons}
+  $('#panel').innerHTML=`<h4>${esc(n.name)}${n.flags?.length?' '+flagLabel(n.flags,false):''} <span class="muted">(${n.type})</span></h4>${seasons}
     ${out.map(e=>li(e,'out')).join('')}${inn.map(e=>li(e,'in')).join('')||''}
     ${!out.length&&!inn.length?'<p class="muted">연결 간선 없음</p>':''}`;
 }
@@ -318,7 +396,7 @@ async function loadScn(){
       mixed:new Set(paths.map(p=>Math.sign(p.impact))).size>1
     })).sort((a,b)=>b.maxAbs-a.maxAbs).slice(0,10);
     const card=document.createElement('div'); card.className='card'; card.style.marginBottom='1rem';
-    card.innerHTML=`<h3>${esc(sc.name)}</h3><p class="meta">${esc(sc.trigger_hint||'')}</p>
+    card.innerHTML=`${sc.flags?.length?`<div class="flags">${flagLabel(sc.flags)}</div>`:''}<h3>${esc(sc.name)}</h3><p class="meta">${esc(sc.trigger_hint||'')}</p>
       <table><tbody>${rows.map((r,i)=>{
         const top=r.paths.slice().sort((a,b)=>Math.abs(b.impact)-Math.abs(a.impact))[0];
         const badge=r.mixed?'⚔️ 경합':'';
@@ -346,7 +424,7 @@ function pathHtml(p){
 async function loadTrack(){
   const t=await j('/api/track');
   const by={};
-  for(const r of t.rows){ (by[r.indicator_name]??={hit:0,partial:0,miss:0,void:0,manual:0})[r.score]=r.n; }
+  for(const r of t.rows){ const b=(by[r.indicator_name]??={hit:0,partial:0,miss:0,void:0,manual:0}); b[r.score]=(b[r.score]||0)+r.n; }
   $('#rates').innerHTML=Object.entries(by).map(([name,s])=>{
     const g=s.hit+s.partial+s.miss, rate=g?Math.round((s.hit+s.partial*0.5)/g*100):0;
     return `<div class="card"><h3>${esc(name)}</h3><div class="big">${g?rate+'<small>%</small>':'—'}</div>

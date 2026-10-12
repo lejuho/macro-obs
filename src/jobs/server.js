@@ -6,6 +6,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { db, stmts } = require('../db');
+const flags = require('../flags');
+const cycle = require('../cycle');
 
 const PORT = Number(process.env.WEB_PORT || 8787);
 const PUB = path.join(__dirname, '..', '..', 'public');
@@ -33,7 +35,21 @@ const api = {
       JOIN indicators i ON i.id = h.indicator_id
       WHERE a.status = 'open' ORDER BY a.triggered_at DESC`).all();
     const pending = db.prepare(`SELECT COUNT(*) AS n FROM predictions WHERE graded_at IS NULL`).get().n;
-    return { hypotheses: hyps, open_alerts, pending_predictions: pending };
+    // 관찰 전용 지표: 활성 가설이 없는 지표 (계기판 표시만, 알림 없음)
+    const watch = db.prepare(`
+      SELECT i.id, i.name, i.unit, i.note, i.category,
+        (SELECT value FROM observations o WHERE o.indicator_id = i.id ORDER BY date DESC LIMIT 1) AS latest,
+        (SELECT date  FROM observations o WHERE o.indicator_id = i.id ORDER BY date DESC LIMIT 1) AS latest_date
+      FROM indicators i
+      WHERE i.id NOT IN (SELECT indicator_id FROM hypotheses WHERE status = 'active')
+        AND EXISTS (SELECT 1 FROM observations o WHERE o.indicator_id = i.id)
+      ORDER BY i.category, i.id`).all();
+    for (const h of hyps) h.flags = flags.forIndicator(h.indicator_name);
+    for (const w of watch) w.flags = flags.forIndicator(w.name);
+    const elections = stmts.upcomingElections.all(3).map((e) => ({
+      ...e, dday: Math.ceil((new Date(e.date) - Date.now()) / 86400_000),
+    }));
+    return { hypotheses: hyps, open_alerts, pending_predictions: pending, watch, elections, cycle: cycle.snapshot(db) };
   },
   series(id, days = 365) {
     const since = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
@@ -41,6 +57,7 @@ const api = {
   },
   track() {
     const rows = stmts.trackRecord.all();
+    const origin_summary = stmts.originSummary.all();
     const predictions = db.prepare(`
       SELECT p.id, p.statement, p.expected_low, p.expected_high, p.target_date,
              p.actual_value, p.score, p.committed_at, i.name AS indicator_name
@@ -48,16 +65,19 @@ const api = {
       JOIN hypotheses h ON h.id = a.hypothesis_id
       JOIN indicators i ON i.id = h.indicator_id
       ORDER BY p.committed_at DESC LIMIT 200`).all();
-    return { rows, predictions };
+    return { rows, predictions, origin_summary };
   },
   graph() {
     const nodes = db.prepare(`SELECT id, type, name, meta_json FROM nodes ORDER BY type, name`).all();
+    for (const n of nodes) n.flags = flags.forNode(n.name);
     const edges = db.prepare(`
       SELECT id, src, dst, kind, sign, weight, path_note, condition_note, leverage_note
       FROM edges`).all();
     return { nodes, edges };
   },
-  scenarios() { return stmts.allScenarios.all(); },
+  scenarios() {
+    return stmts.allScenarios.all().map((sc) => ({ ...sc, flags: flags.forScenario(sc.name) }));
+  },
   scenario(id) {
     const sc = stmts.scenarioById.get(Number(id));
     if (!sc) return null;
@@ -65,10 +85,66 @@ const api = {
       .map((r) => ({ ...r, path: JSON.parse(r.path_json), path_json: undefined }));
     return { scenario: sc, results };
   },
+  worldviewCurrent() {
+    const current = stmts.latestWorldview.get();
+    if (!current) return null;
+    const bundle = require('../worldview').getBundle(current.id);
+    return {
+      commit: bundle.commit,
+      scenarios: bundle.scenarios.map((s) => {
+        const snap = JSON.parse(s.scenario_snapshot_json);
+        return { scenario_id: s.scenario_id, name: s.name, role: s.role, shocks: snap.shocks || [] };
+      }),
+      paths: bundle.paths.map((p) => ({
+        id: p.id, scenario_id: p.scenario_id, scenario_name: p.scenario_name,
+        node_id: p.node_id, name: p.name, impact: p.impact, hops: p.hops, path: p.path,
+      })),
+      political_contexts: bundle.political_contexts.map((p) => ({
+        country_code: p.country_code, country_name: p.country_name, valid_from: p.valid_from,
+      })),
+      observables: bundle.observables.map((o) => ({
+        id: o.id, path_id: o.path_id, node: o.node_name, indicator: o.indicator_name,
+        expected_direction: o.expected_direction, threshold: o.threshold, metric: o.metric,
+        baseline_value: o.baseline_value, baseline_date: o.baseline_date,
+        actual_value: o.actual_value, actual_date: o.actual_date, change_value: o.change_value,
+        direction_score: o.direction_score, status: o.status,
+      })),
+      review: bundle.review ? JSON.parse(bundle.review.raw_json) : null,
+    };
+  },
 };
 
 function handle(req, res) {
   const url = new URL(req.url, 'http://x');
+
+  // MCP Streamable HTTP (테일넷 전용 — 웹서버와 같은 보안 경계)
+  // 읽기는 무인증, 쓰기 도구는 MCP_WRITE_TOKEN 헤더 일치 시에만 노출 (토큰 미설정 = HTTP 항상 읽기 전용)
+  if (url.pathname === '/mcp') {
+    if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', async () => {
+      const { createHandler, TOOLS } = require('../mcp');
+      const { WRITE_TOOLS } = require('../mcp-write-tools');
+      const crypto = require('crypto');
+      const token = process.env.MCP_WRITE_TOKEN;
+      const given = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      const authed = !!token && given.length === token.length &&
+        crypto.timingSafeEqual(Buffer.from(given), Buffer.from(token));
+      const handleRpc = createHandler(authed ? [...TOOLS, ...WRITE_TOOLS] : TOOLS);
+      let msg;
+      try { msg = JSON.parse(body); }
+      catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }));
+      }
+      const out = await handleRpc(msg);
+      if (!out) { res.writeHead(202).end(); return; } // notification
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(out));
+    });
+    return;
+  }
   const send = (code, body, type = 'application/json; charset=utf-8') => {
     res.writeHead(code, { 'Content-Type': type, 'Cache-Control': url.pathname.startsWith('/api') ? 'no-store' : 'max-age=60' });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -82,6 +158,10 @@ function handle(req, res) {
     if (url.pathname === '/api/track') return send(200, api.track());
     if (url.pathname === '/api/graph') return send(200, api.graph());
     if (url.pathname === '/api/scenarios') return send(200, api.scenarios());
+    if (url.pathname === '/api/worldview/current') {
+      const r = api.worldviewCurrent();
+      return r ? send(200, r) : send(404, { error: 'not found' });
+    }
     if ((m = url.pathname.match(/^\/api\/scenario\/(\d+)$/))) {
       const r = api.scenario(m[1]);
       return r ? send(200, r) : send(404, { error: 'not found' });

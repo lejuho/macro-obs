@@ -34,7 +34,7 @@ assert(ctx.includes('p10/p50/p90'), 'percentiles present');
 
 console.log('3. 가설 수정 체인 (revised_from)');
 const { id: indId } = stmts.upsertIndicator.get({
-  source: 'ecos', source_code: 'T/h', name: 'T환율', freq: 'D', unit: 'W', category: 'macro',
+  source: 'ecos', source_code: 'T/h', name: 'T환율', freq: 'D', unit: 'W', category: 'macro', note: null,
 });
 db.prepare(`INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, window_rule, rationale)
   VALUES ('환율 뉴노멀: 1350~1480 밴드', ?, 1350, 1480, 'close_3', '구근거')`).run(indId);

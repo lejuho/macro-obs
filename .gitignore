@@ -2,3 +2,4 @@
 db/*.db*
 log/
 node_modules/
+tmp/*

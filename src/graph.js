@@ -108,7 +108,9 @@ function formatScenario(scenario, limit = 10) {
     .slice(0, limit);
 
   const bar = (v) => (v < 0 ? '🔴' : '🟢') + Math.abs(v).toFixed(2);
-  const lines = [`🗺 <b>${scenario.name}</b>`];
+  const flags = require('./flags');
+  const f = flags.label(flags.forScenario(scenario.name));
+  const lines = [`🗺 <b>${scenario.name}</b>${f ? '  ' + f : ''}`];
   if (scenario.trigger_hint) lines.push(`<i>트리거 힌트: ${scenario.trigger_hint}</i>`);
   lines.push('');
   for (const n of nodes) {

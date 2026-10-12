@@ -36,7 +36,7 @@ assert(grade({ expected_low: null, expected_high: null }, { date: '2026-10-03', 
 
 console.log('3. DB 플로우: alert → commit → grade');
 const { id: indId } = stmts.upsertIndicator.get({
-  source: 'ecos', source_code: 'T/x', name: 'T환율', freq: 'D', unit: 'W', category: 'macro',
+  source: 'ecos', source_code: 'T/x', name: 'T환율', freq: 'D', unit: 'W', category: 'macro', note: null,
 });
 db.prepare(`INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, rationale)
   VALUES ('h', ?, 1350, 1480, 'r')`).run(indId);

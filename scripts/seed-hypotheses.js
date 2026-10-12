@@ -5,11 +5,35 @@
 const { db, stmts } = require('../src/db');
 
 // indicator는 수집기가 만들었어야 함 → 먼저 daily.js 또는 collect 1회 실행 필요.
-function indicatorId(sourceCode) {
-  const row = db.prepare(`SELECT id FROM indicators WHERE source='ecos' AND source_code=?`).get(sourceCode);
-  if (!row) throw new Error(`indicator not found: ${sourceCode} — 수집기를 먼저 1회 실행하세요`);
+function indicatorId(sourceCode, source = 'ecos') {
+  const row = db.prepare(`SELECT id FROM indicators WHERE source=? AND source_code=?`).get(source, sourceCode);
+  if (!row) throw new Error(`indicator not found: ${source}/${sourceCode} — 수집기를 먼저 1회 실행하세요`);
   return row.id;
 }
+
+// 글로벌 지표 가설 (--global 플래그로 등록. FRED 수집 1회 선행 필요)
+// ⚠️ 밴드는 자리표시자 — 관찰 전용으로 둘 지표(달러지수, USD/JPY 등)는 여기 넣지 않았다.
+//    가설 = 뉴노멀 주장이 있는 것만. 알림은 커밋을 요구하므로 밴드 남발 = 커밋 피로.
+const SEEDS_GLOBAL = [
+  {
+    statement: '미국 10년물 고금리 뉴노멀: 3.8~5.0% 밴드',
+    source: 'fred', source_code: 'DGS10',
+    band_low: 3.8, band_high: 5.0, window_rule: 'close_3',
+    rationale: '재정적자 구조화 + 기간프리미엄 복원으로 저금리 회귀 없음이 가설. 3.8 하회는 침체 프라이싱, 5.0 상회는 국채시장 발작 국면(/scn node 미국장기금리로 세계 확인).',
+  },
+  {
+    statement: 'VIX 평시 레짐: 12~28 밴드',
+    source: 'fred', source_code: 'VIXCLS',
+    band_low: 12, band_high: 28, window_rule: 'close_2',
+    rationale: '12 하회는 과열 안일(숏볼 축적), 28 상회는 위험회피 급증. 단독 해석 금지 — HY 스프레드와 교차 확인.',
+  },
+  {
+    statement: 'HY 스프레드 신용 사이클: 2.8~5.0%p 밴드',
+    source: 'fred', source_code: 'BAMLH0A0HYM2',
+    band_low: 2.8, band_high: 5.0, window_rule: 'close_3',
+    rationale: '2.8 하회는 신용 과열, 5.0 상회는 침체 프라이싱 개시. VIX보다 거시적 — 이탈 시 우선 신뢰.',
+  },
+];
 
 const SEEDS = [
   {
@@ -38,14 +62,15 @@ const SEEDS = [
   },
 ];
 
+const seeds = process.argv.includes('--global') ? SEEDS_GLOBAL : SEEDS;
 let added = 0;
-for (const s of SEEDS) {
+for (const s of seeds) {
   const exists = db.prepare(`SELECT 1 FROM hypotheses WHERE statement = ?`).get(s.statement);
   if (exists) { console.log(`skip (exists): ${s.statement}`); continue; }
   db.prepare(`
     INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, window_rule, rationale)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(s.statement, indicatorId(s.source_code), s.band_low, s.band_high, s.window_rule, s.rationale);
+  `).run(s.statement, indicatorId(s.source_code, s.source || 'ecos'), s.band_low, s.band_high, s.window_rule, s.rationale);
   console.log(`added: ${s.statement}`);
   added++;
 }

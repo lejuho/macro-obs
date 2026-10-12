@@ -4,11 +4,15 @@
 //   0 19 * * *  cd /home/pi/macro-obs && /usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/daily.js >> log/daily.log 2>&1
 
 const { collect } = require('../collectors/ecos');
+const { collect: collectFred } = require('../collectors/fred');
+const { computeAll: computeDerived } = require('../derived');
+const { scan: scanTriggers, formatFired } = require('../triggers');
 const { scan } = require('../watcher');
 const { send, alertKeyboard, formatBreach } = require('../notify/telegram');
 const { db, stmts } = require('../db');
 const { grade, formatTrack } = require('../predictions');
 const { exposureSection, scenarioHints } = require('../exposure');
+const worldview = require('../worldview');
 
 async function main() {
   const t0 = Date.now();
@@ -16,11 +20,18 @@ async function main() {
 
   // 1. 수집
   const results = await collect({ lookbackDays: 30 });
-  for (const r of results) {
+  const fredResults = await collectFred({ lookbackDays: 45 });
+  for (const r of [...results, ...fredResults]) {
     console.log(r.ok ? `  collect ${r.key}: ${r.count} rows` : `  collect ${r.key}: FAILED — ${r.error}`);
   }
   if (results.length && results.every((r) => !r.ok)) {
     await send(`⚠️ macro-obs: 전체 수집 실패\n${results.map((f) => f.error).join('\n')}`).catch(() => {});
+  }
+
+  // 1.5 파생 지표 계산
+  for (const r of computeDerived()) {
+    if (r.skip) continue;
+    console.log(r.ok ? `  derived ${r.key}: ${r.count} rows` : `  derived ${r.key}: FAILED — ${r.error}`);
   }
 
   // 2. 밴드 감시 → 알림
@@ -34,6 +45,13 @@ async function main() {
     });
     if (msg.message_id) stmts.setAlertTgId.run(msg.message_id, b.alert_id);
     console.log(`  alert #${b.alert_id} sent`);
+  }
+
+  // 2.5 결정 트리거 평가 (스펙 §4.2)
+  for (const f of scanTriggers()) {
+    const msg = await send(formatFired(f));
+    if (msg.message_id) stmts.setAlertTgId.run(msg.message_id, f.alert_id);
+    console.log(`  trigger fired: #${f.trigger.id} ${f.trigger.name}`);
   }
 
   // 3. 채점 (target_date 도래 예측)
@@ -75,6 +93,25 @@ async function main() {
     console.log(`  nag alert #${a.id}`);
   }
 
+  // 4.5 선거 D-30/D-7 리마인더 (kv 가드 — 각 1회)
+  for (const e of stmts.upcomingElections.all(5)) {
+    const dday = Math.ceil((new Date(e.date) - Date.now()) / 86400_000);
+    for (const mark of [30, 7]) {
+      if (dday === mark && !stmts.kvGet.get(`elec_${e.id}_d${mark}`)) {
+        const levers = stmts.leversFor.all(e.id);
+        await send([
+          `🗳 <b>D-${mark}: ${e.country} ${e.body}</b> (${e.date})`,
+          e.note ? `<i>${e.note}</i>` : '',
+          ...levers.map((l) => `· [${l.outcome_branch}] ${l.lever}`),
+          levers.length ? '' : '⚠️ 레버 미작성 — data/elections-seed.js 갱신 시점',
+          '분기별 결과가 나오면 해당 시나리오를 열어 세계를 확인하라.',
+        ].filter(Boolean).join('\n'));
+        stmts.kvSet.run(`elec_${e.id}_d${mark}`, '1');
+        console.log(`  election reminder: ${e.country} D-${mark}`);
+      }
+    }
+  }
+
   // 5. 월요일 주간 트랙레코드 리포트 (하루 다회 실행 대비 kv 가드)
   const today = new Date().toISOString().slice(0, 10);
   if (new Date().getDay() === 1 && stmts.kvGet.get('weekly_report_last')?.value !== today) {
@@ -82,6 +119,19 @@ async function main() {
     if (rows.length) {
       await send(formatTrack(rows));
       stmts.kvSet.run('weekly_report_last', today);
+    }
+  }
+
+  // 6. 현재 관점 T+N 검토 — 하루 최대 1건, 예비 판정 후 사용자 확인 전까지 그래프 불변
+  const dueView = stmts.dueWorldviewReviews.get();
+  if (dueView) {
+    const r = worldview.generateReview(dueView.id);
+    if (!r.ok) console.error(`  worldview #${dueView.id} review FAILED — ${r.reason}`);
+    else {
+      const msg = await send(worldview.formatReview(r.bundle.commit, r.data));
+      stmts.setWorldviewReviewPending.run({ id: dueView.id, message_id: msg.message_id || null });
+      if (msg.message_id) stmts.kvSet.run(`worldview_review_msg_${msg.message_id}`, String(dueView.id));
+      console.log(`  worldview #${dueView.id}: review pending confirmation`);
     }
   }
 

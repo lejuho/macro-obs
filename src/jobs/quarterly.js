@@ -1,15 +1,18 @@
 // 분기 배치 (Phase 2): 대상 기업의 최신 정기보고서 → 발췌 → LLM 추출 → exposures
 // 재개 가능(resumable): 이미 추출된 (corp, fy, reprt)는 건너뜀 → 중단돼도 재실행하면 이어짐.
 //
-// cron (분기 첫 주말 등 수동 판단으로 돌려도 됨):
-//   0 3 15 1,4,7,10 *  cd /home/pi/macro-obs && /usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/quarterly.js >> log/quarterly.log 2>&1
+// cron (분기당 10회: 30개사씩 5시간 간격, 199개사 + 재시도 여유):
+//   0 3,8,13,18,23 13-14 1,4,7,10 *  cd /home/pi/macro-obs && PATH=/home/pi/.local/bin:/usr/bin:/bin /usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/quarterly.js --limit 30 >> log/quarterly.log 2>&1
 //
 // 최초 셋업:
 //   node src/jobs/quarterly.js --sync     # 고유번호 동기화 + targets.csv 마킹 (최초/반기 1회)
 //   node src/jobs/quarterly.js            # 추출 실행
 //   node src/jobs/quarterly.js --limit 3  # 파일럿: 3개사만
 
-const { syncCorpCodes, markTargets, latestReport, fetchExcerpt } = require('../collectors/dart');
+const { syncCorpCodes, markTargets, latestReports, fetchExcerpt } = require('../collectors/dart');
+const { cacheReport, clearReportCache } = require('../mcp-batch-tools');
+
+const AGENT = process.env.EXTRACT_AGENT === '1'; // 2층 opt-in — 실패 시 자동 플레인 폴백
 const { extract } = require('../extract/claude');
 const { stmts } = require('../db');
 const { send } = require('../notify/telegram');
@@ -39,25 +42,47 @@ async function main() {
   const stats = { done: 0, skipped: 0, failed: 0, noReport: 0 };
   const failures = [];
 
-  for (const corp of targets.slice(0, limit === Infinity ? undefined : limit + 50)) {
+  for (const corp of targets) {
     if (stats.done >= limit) break;
     try {
-      const rpt = await latestReport(corp.corp_code);
-      if (!rpt) { stats.noReport++; console.log(`  ${corp.name}: 정기보고서 없음`); continue; }
+      const reports = await latestReports(corp.corp_code);
+      if (!reports.length) { stats.noReport++; console.log(`  ${corp.name}: 정기보고서 없음`); continue; }
 
-      if (stmts.hasExposure.get(corp.corp_code, rpt.fy, rpt.reprt_code)) {
-        stats.skipped++;
+      let rpt = null;
+      let excerpt = null;
+      let skipped = false;
+      const unavailable = [];
+      for (const candidate of reports) {
+        if (stmts.hasExposure.get(corp.corp_code, candidate.fy, candidate.reprt_code)) {
+          stats.skipped++;
+          skipped = true;
+          break;
+        }
+
+        console.log(`  ${corp.name}: ${candidate.report_nm} (${candidate.rcept_no}) 발췌 중...${AGENT ? ' [agent]' : ''}`);
+        try {
+          excerpt = await fetchExcerpt(candidate.rcept_no, AGENT ? { cache: true } : {});
+          rpt = candidate;
+          break;
+        } catch (e) {
+          if (e.code !== 'DART_DOCUMENT_UNAVAILABLE') throw e;
+          unavailable.push(candidate.rcept_no);
+          console.warn(`  ⚠ ${corp.name}: ${e.message} → 이전 정기보고서 시도`);
+        }
+      }
+      if (skipped) continue;
+      if (!rpt) {
+        stats.failed++;
+        failures.push(`${corp.name}: DART 원문 없음 (${unavailable.join(', ')})`);
         continue;
       }
 
-      console.log(`  ${corp.name}: ${rpt.report_nm} (${rpt.rcept_no}) 발췌 중...`);
-      const excerpt = await fetchExcerpt(rpt.rcept_no);
       if (excerpt.length < 500) {
         stats.failed++; failures.push(`${corp.name}: 발췌 빈약(${excerpt.length}자)`);
         continue;
       }
 
-      const r = extract(corp.name, excerpt);
+      const r = extract(corp.name, excerpt, { agent: AGENT, rceptNo: rpt.rcept_no });
       if (!r.ok) {
         stats.failed++; failures.push(`${corp.name}: ${r.reason}`);
         continue;
@@ -85,6 +110,7 @@ async function main() {
     }
   }
 
+  if (AGENT) clearReportCache(); // 원문 임시 캐시 정리
   const summary = `📦 노출 매트릭스 배치: 추출 ${stats.done} · 스킵 ${stats.skipped} · 실패 ${stats.failed} · 보고서없음 ${stats.noReport}`;
   console.log(summary);
   if (failures.length) console.log('실패 목록:\n  ' + failures.join('\n  '));

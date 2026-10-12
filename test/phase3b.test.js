@@ -17,7 +17,7 @@ const assert = (c, n) => c ? (pass++, console.log(`  ✅ ${n}`)) : (fail++, cons
 
 // 픽스처: 가설 + 관측 + 알림 + 예측
 const { id: indId } = stmts.upsertIndicator.get({
-  source: 'ecos', source_code: 'T/w', name: '원/달러 환율', freq: 'D', unit: 'KRW', category: 'macro',
+  source: 'ecos', source_code: 'T/w', name: '원/달러 환율', freq: 'D', unit: 'KRW', category: 'macro', note: null,
 });
 db.prepare(`INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, rationale)
   VALUES ('환율 뉴노멀 1350~1480', ?, 1350, 1480, '근거')`).run(indId);

@@ -7,7 +7,7 @@ const fs = require('fs');
 if (fs.existsSync(process.env.DB_PATH)) fs.unlinkSync(process.env.DB_PATH);
 
 const { db, stmts } = require('../src/db');
-const { validate } = require('../src/extract/claude');
+const { validate, parseJsonObject, buildInput } = require('../src/extract/claude');
 const { exposureSection } = require('../src/exposure');
 const { formatBreach } = require('../src/notify/telegram');
 
@@ -26,6 +26,14 @@ assert(v.warnings.includes('fx_debt_ratio'), 'missing evidence → warning not r
 v = validate('```json\n{"export_ratio": 0.5, "evidence": {}}\n```', excerpt);
 assert(v.ok, 'markdown fence stripped');
 
+v = validate('분석 결과입니다.\n```json\n{"export_ratio": 0.5, "evidence": {}}\n```\n이상입니다.', excerpt);
+assert(v.ok, '설명문 사이의 JSON 객체만 추출');
+assert(parseJsonObject('설명 {not json} 후 {"export_ratio":null}').export_ratio === null,
+  '잘못된 중괄호를 건너뛰고 유효한 JSON 탐색');
+const agentInput = buildInput('테스트', '수출 비중 10%', { agent: true, rceptNo: '20260000000001' });
+assert(agentInput.indexOf('에이전트 도구 지침') < agentInput.indexOf('--- 보고서 발췌 시작 ---'),
+  '도구 지침을 보고서 발췌 밖으로 분리');
+
 v = validate(JSON.stringify({ export_ratio: 78 }), excerpt); // % 변환 안 한 위반
 assert(!v.ok && v.reason.includes('범위'), 'ratio > 1 rejected');
 
@@ -33,6 +41,15 @@ v = validate(JSON.stringify({
   export_ratio: 0.5, evidence: { export_ratio: '보고서에 없는 지어낸 인용구절임' },
 }), excerpt);
 assert(!v.ok && v.reason.includes('불일치'), 'fabricated evidence quote rejected');
+
+v = validate(JSON.stringify({
+  export_ratio: 0.78, evidence: { export_ratio: '78%-30%' },
+}), excerpt);
+assert(v.ok, '숫자 산식 evidence: 각 피연산자 원문 실존 시 허용');
+v = validate(JSON.stringify({
+  export_ratio: 0.78, evidence: { export_ratio: '78%+99%' },
+}), excerpt);
+assert(!v.ok, '숫자 산식 evidence: 피연산자 하나라도 없으면 반려');
 
 v = validate('죄송합니다, JSON을 만들 수 없습니다', excerpt);
 assert(!v.ok, 'non-JSON rejected');

@@ -32,9 +32,41 @@ const SERIES = [
     stat: '901Y009', item: '0', freq: 'M', unit: 'index',
   },
   {
+    key: 'ktb10y',
+    name: '국고채 10년 수익률',
+    stat: '817Y002', item: '010210000', freq: 'D', unit: '%',
+  },
+  {
+    key: 'exports_total',
+    name: '수출총액(통관)',
+    stat: '901Y118', item: 'T002', freq: 'M', unit: '천달러',
+  },
+  {
+    key: 'semi_export_value_index',
+    name: '반도체 수출금액지수',
+    stat: '403Y001', item: '30911AA', freq: 'M', unit: 'index',
+  },
+  {
     key: 'current_account',
     name: '경상수지',
     stat: '301Y013', item: '000000', freq: 'M', unit: '백만달러',
+  },
+  // 산업활동동향 (통계청 원천, ECOS 재게시 — 코드 실검증 2026-07-13, ~202605 수신 확인)
+  // ⚠️ 이 표들은 2차원(item2)이 있다. item2 생략 시 경상/불변/계절조정이 같은 날짜에 겹쳐 써짐.
+  {
+    key: 'retail_sales',
+    name: '소매판매액지수(불변지수)',
+    stat: '901Y100', item: 'G0', item2: 'T2', freq: 'M', unit: 'index',
+  },
+  {
+    key: 'all_industry_prod',
+    name: '전산업생산지수(원계열, 농림어업 제외)',
+    stat: '901Y033', item: 'A00', item2: '1', freq: 'M', unit: 'index',
+  },
+  {
+    key: 'mfg_inventory_ratio',
+    name: '제조업 재고율(재고/출하)',
+    stat: '901Y026', item: 'I33A', freq: 'M', unit: '%',
   },
 ];
 
@@ -67,6 +99,7 @@ async function fetchSeries(s, lookbackDays) {
     'https://ecos.bok.or.kr/api/StatisticSearch',
     ECOS_API_KEY(), 'json', 'kr', '1', '3000',
     s.stat, s.freq, fmtDate(start, s.freq), fmtDate(end, s.freq), s.item,
+    ...(s.item2 ? [s.item2] : []),
   ].join('/');
 
   const res = await fetch(url);
@@ -88,10 +121,11 @@ async function collect({ lookbackDays = 30 } = {}) {
   for (const s of SERIES) {
     const { id } = stmts.upsertIndicator.get({
       source: 'ecos', source_code: `${s.stat}/${s.item}`,
-      name: s.name, freq: s.freq, unit: s.unit, category: 'macro',
+      name: s.name, freq: s.freq, unit: s.unit, category: 'macro', note: s.note || null,
     });
     try {
-      const obs = await fetchSeries(s, s.freq === 'D' ? lookbackDays : 400);
+      // 월간 시리즈는 YoY 계산에 전년동월이 필요하므로 최소 400일은 당긴다 (백필 시 lookbackDays가 우선)
+      const obs = await fetchSeries(s, s.freq === 'D' ? lookbackDays : Math.max(lookbackDays, 400));
       tx(() => {
         for (const o of obs) stmts.upsertObs.run(id, o.date, o.value);
       });

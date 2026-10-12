@@ -41,6 +41,7 @@ function scan() {
     const obs = stmts.lastNObs.all(hyp.indicator_id, parseWindowRule(hyp.window_rule));
     const breach = judge(hyp, obs);
     if (!breach) continue;
+    if (stmts.pendingPredictionForDirection.get(hyp.id, breach.direction)) continue;
     if (inCooldown(hyp.id)) continue;
     const { id } = stmts.insertAlert.get({ hypothesis_id: hyp.id, ...breach });
     created.push({ alert_id: id, hyp, breach });

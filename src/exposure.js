@@ -15,7 +15,13 @@ const WEIGHTS = {
 const pc = (v) => (v == null ? '-' : Math.round(v * 100) + '%');
 
 // 지표 → 그래프 흐름 노드 (밴드 이탈 시 역방향 시나리오 조회용)
+// ECOS는 수동 매핑, FRED는 SERIES 정의의 graph_node에서 자동 생성
 const NODE_MAP = { '731Y001/0000001': '원화가치' };
+try {
+  for (const s of require('./collectors/fred').SERIES) {
+    if (s.graph_node) NODE_MAP[s.code] = s.graph_node;
+  }
+} catch { /* fred 미사용 환경 무해 */ }
 
 /** 이 지표(흐름 노드)를 미는 사전계산 시나리오 상위 N */
 function scenarioHints(indicatorSourceCode, limit = 3) {
