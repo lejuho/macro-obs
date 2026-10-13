@@ -1,7 +1,7 @@
 // 뉴스 프레이밍 파이프라인 (Phase 5) — LLM은 인자 주입(DI)으로 테스트 가능
 const fs = require('fs');
 const path = require('path');
-const { stmts, tx } = require('./db');
+const { db, stmts, tx } = require('./db');
 const llm = require('./llm');
 const QUERIES = require('../data/news-queries');
 const {
@@ -9,6 +9,55 @@ const {
 } = require('./political-context');
 
 const P = (f) => fs.readFileSync(path.join(__dirname, '..', 'prompts', f), 'utf8');
+
+// ── 외부 에이전트 보고서 연결 ─────────────────────────────
+// reports(save_report)는 외부 에이전트의 의견이지 관측소 판단이 아니다. 클러스터와의 연결은
+// 보고서가 명시한 event_ids만으로 만든다 (제목 매칭 금지):
+//   news_revisit 이벤트 data.cluster_id / news_cluster 이벤트 data.cluster_ids
+const REPORT_MAX = 3;               // 재방문에 넣을 보고서 수
+const REPORT_EXCERPT = 1500;        // 재방문용 보고서당 발췌 상한(자)
+const CLUSTER_NOTE_EXCERPT = 300;   // 클러스터링용 메모 발췌 상한(자)
+const CLUSTER_NOTE_MAX = 5;         // 클러스터링 프롬프트에 넣을 메모 수
+
+const linkedReportRows = db.prepare(`
+  SELECT r.id, r.ts, r.author, r.title, r.body, e.id AS event_id
+  FROM reports r, json_each(r.event_ids_json) j
+  JOIN events e ON e.id = j.value
+  WHERE (e.kind = 'news_revisit' AND json_extract(e.data_json, '$.cluster_id') = ?)
+     OR (e.kind = 'news_cluster' AND EXISTS (
+          SELECT 1 FROM json_each(e.data_json, '$.cluster_ids') k WHERE k.value = ?))
+  ORDER BY r.id DESC`);
+
+/** 순수: 보고서 본문에서 해당 이벤트 id(#N)를 언급하는 마크다운 섹션만 발췌. 없으면 앞부분. */
+function excerptReport(body, eventIds, max) {
+  const text = String(body || '');
+  const sections = [];
+  let cur = [];
+  for (const line of text.split('\n')) {
+    if (/^#{1,6}\s/.test(line) && cur.length) { sections.push(cur.join('\n')); cur = []; }
+    cur.push(line);
+  }
+  if (cur.length) sections.push(cur.join('\n'));
+  const res = eventIds.map((id) => new RegExp(`#${id}(?!\\d)`));
+  const mentions = (t) => res.some((re) => re.test(t));
+  // 제목(헤딩)이 이벤트를 가리키는 섹션 우선, 없으면 본문에서 언급한 섹션
+  const headed = sections.filter((sec) => mentions(sec.split('\n')[0]));
+  const hit = headed.length ? headed : sections.filter(mentions);
+  const out = (hit.length ? hit.join('\n') : text).trim();
+  return out.length > max ? `${out.slice(0, max)}…(생략)` : out;
+}
+
+/** 클러스터에 명시적으로 연결된 보고서 (최신순, 보고서당 1행) */
+function linkedReports(clusterId, { limit = REPORT_MAX, excerpt = REPORT_EXCERPT } = {}) {
+  const byId = new Map();
+  for (const r of linkedReportRows.all(clusterId, clusterId)) {
+    if (!byId.has(r.id)) byId.set(r.id, { id: r.id, ts: r.ts, author: r.author, title: r.title, body: r.body, event_ids: [] });
+    byId.get(r.id).event_ids.push(r.event_id);
+  }
+  return [...byId.values()].slice(0, limit).map(({ body, ...r }) => ({ ...r, excerpt: excerptReport(body, r.event_ids, excerpt) }));
+}
+
+const REPORT_LABEL = '외부 에이전트 보고서 (참고, 관측소 판단 아님)';
 
 // ── 클러스터링 ──────────────────────────────────────────
 
@@ -23,13 +72,17 @@ const AGENT_REVISIT_APPENDIX = `
 수치가 걸린 주장(예: "연말 1650")은 뉴스 서사가 아니라 get_series의 실제 데이터로 채점하라.
 현재 기사가 부족하면 search_news_live로 보강하되, 근거 없는 held/failed 판정은 여전히 금지.`;
 
-function buildClusterPrompt(items, existingKeys, { agent = false, politicalContexts = [] } = {}) {
+function buildClusterPrompt(items, existingKeys, { agent = false, politicalContexts = [], reportNotes = [] } = {}) {
   const lines = items.map((it) =>
     `[${it.id}] ${it.source}(${it.spectrum}) | ${it.title} | ${it.description || ''}`);
   return [
     P('news-cluster.md'),
     agent ? AGENT_CLUSTER_APPENDIX : '',
     existingKeys.length ? `기존 사건 키: ${existingKeys.join(', ')}` : '기존 사건 키: 없음',
+    reportNotes.length
+      ? [`[기존 사건에 대한 ${REPORT_LABEL}] 기사 배정 판단의 보조 맥락일 뿐이다. 이 메모의 내용을 core_frame·spectrum_frames·notable_claims에 옮기지 마라 — 프레이밍은 기사만으로 요약한다.`,
+        ...reportNotes.map((n) => `- ${n.event_key} ← 보고서 #${n.report_id} (${n.author}, ${String(n.ts).slice(0, 10)}): ${n.excerpt.replace(/\s+/g, ' ')}`)].join('\n')
+      : '',
     // enum을 명시 — 이전엔 정치구조 JSON의 하위 키(regime, legislature…)를 축으로 오인해 쿼리 전체가 거부됐다
     `[허용 국가 코드] ${COUNTRIES.map((c) => c.code).join(', ')} (이 밖의 나라는 countries에 넣지 마라)`,
     `[허용 구조 축] ${AXES.join(', ')} (axis 값은 이 중 정확히 하나. 하위 필드명·국가명·자유 서술 금지)`,
@@ -158,10 +211,17 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
   const items = stmts.unclusteredItems.all(query);
   if (!items.length) return { query, skip: 'no items' };
 
-  const existing = stmts.recentClusters.all(query).map((c) => c.event_key);
+  const recentRows = stmts.recentClusters.all(query);
+  const existing = recentRows.map((c) => c.event_key);
+  const reportNotes = [];
+  for (const c of recentRows) {
+    if (reportNotes.length >= CLUSTER_NOTE_MAX) break;
+    const [r] = linkedReports(c.id, { limit: 1, excerpt: CLUSTER_NOTE_EXCERPT });
+    if (r) reportNotes.push({ event_key: c.event_key, report_id: r.id, author: r.author, ts: r.ts, excerpt: r.excerpt });
+  }
   const queryConfig = QUERIES.find((q) => q.query === query) || {};
   const politicalContexts = resolveProfiles(queryConfig.countries || [], new Date());
-  const parsed = llm.runJson(buildClusterPrompt(items, existing, { agent, politicalContexts }),
+  const parsed = llm.runJson(buildClusterPrompt(items, existing, { agent, politicalContexts, reportNotes }),
     { runLLM, requireKey: 'clusters', label: `cluster-${query}`, agent, servers: ['batch'] });
   if (!parsed.ok) return { query, ok: false, reason: parsed.reason };
 
@@ -173,6 +233,7 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
   if (!v.ok) return { query, ok: false, reason: v.reason, warnings: clean.warnings };
 
   let created = 0, updated = 0, gaps = 0;
+  const clusterIds = new Set(); // news_cluster 이벤트에 실어 보고서(event_ids)↔클러스터 연결의 근거로 쓴다
   const itemById = new Map(items.map((item) => [item.id, item]));
   tx(() => {
     for (const c of parsed.data.clusters) {
@@ -192,6 +253,7 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
         }).id;
         created++;
       }
+      clusterIds.add(clusterId);
       for (const id of c.member_ids) stmts.assignCluster.run(clusterId, id);
       // initial 스냅샷은 클러스터당 1회 (신규일 때만)
       if (!row) {
@@ -215,6 +277,8 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
   return {
     query, ok: true, created, updated, noise: (parsed.data.noise_ids || []).length,
     deferred: clean.missing.length, framing_gaps: gaps,
+    cluster_ids: [...clusterIds],
+    ...(reportNotes.length ? { report_notes: reportNotes.map((n) => n.report_id) } : {}),
     ...(parsed.repaired ? { repaired: true } : {}),
     ...(clean.warnings.length ? { warnings: clean.warnings } : {}),
   };
@@ -222,7 +286,7 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
 
 // ── 90일 재방문 ─────────────────────────────────────────
 
-function buildRevisitPrompt(cluster, initial, recentItems, { agent = false, currentContexts = [] } = {}) {
+function buildRevisitPrompt(cluster, initial, recentItems, { agent = false, currentContexts = [], reports = [] } = {}) {
   const claims = (initial.notable_claims || [])
     .map((c) => `- ${c.source}: ${c.claim}`).join('\n') || '- (없음)';
   const frames = Object.entries(initial.spectrum_frames || {})
@@ -246,7 +310,24 @@ function buildRevisitPrompt(cluster, initial, recentItems, { agent = false, curr
     `[현재 정치구조]\n${JSON.stringify(currentContexts)}`,
     `[당시 구조적 가설]\n${hypotheses}`,
     `[현재 기사들]`, recent,
+    ...(reports.length ? [
+      `[${REPORT_LABEL}]\n외부 에이전트가 이 사건 관련 이벤트를 분석해 남긴 메모다. 정답이 아니라 확인할 거리(fact-check 힌트)다.\n` +
+      '- 메모의 주장은 현재 기사·지표·검색으로 네가 직접 확인한 경우에만 판정 근거로 쓴다. 확인 못 한 결론을 outcome_summary·verdict·lesson에 옮기지 마라.\n' +
+      '- report_checks에 메모의 핵심 주장마다 confirmed|contradicted|unverified와 너의 근거를 적어라.',
+      ...reports.map((r) => `--- 보고서 #${r.id} (${r.author}, ${String(r.ts).slice(0, 10)}) ${r.title}\n${r.excerpt}`),
+    ] : []),
   ].join('\n\n');
+}
+
+/** 순수: report_checks에서 참조하지 않은 보고서·잘못된 enum 항목 제거 (재방문 전체를 버리지 않음) */
+function cleanReportChecks(data, consultedIds) {
+  const ok = new Set(consultedIds);
+  const checks = Array.isArray(data.report_checks) ? data.report_checks : [];
+  data.report_checks = checks.filter((c) => c && ok.has(Number(c.report_id))
+    && ['confirmed', 'contradicted', 'unverified'].includes(c.status) && c.point)
+    .map((c) => ({ report_id: Number(c.report_id), point: String(c.point), status: c.status, evidence: c.evidence || null }));
+  data.consulted_report_ids = [...consultedIds]; // 코드가 기록 — 자기확증 감사용
+  return data;
 }
 
 function validateRevisitOut(data, initialClaims, initialHypotheses = []) {
@@ -288,11 +369,13 @@ async function revisitCluster(cluster, { runLLM = llm.run, fetchRecent, agent = 
     } catch { recent = []; }
   }
 
-  const parsed = llm.runJson(buildRevisitPrompt(cluster, initial, recent, { agent, currentContexts }),
+  const reports = linkedReports(cluster.id);
+  const parsed = llm.runJson(buildRevisitPrompt(cluster, initial, recent, { agent, currentContexts, reports }),
     { runLLM, requireKey: 'outcome_summary', label: `revisit-${cluster.event_key}`, agent, servers: ['batch', 'obs'] });
   if (!parsed.ok) return { cluster: cluster.event_key, ok: false, reason: parsed.reason };
   const v = validateRevisitOut(parsed.data, initial.notable_claims, initial.structural_hypotheses);
   if (!v.ok) return { cluster: cluster.event_key, ok: false, reason: v.reason };
+  cleanReportChecks(parsed.data, reports.map((r) => r.id));
 
   tx(() => {
     stmts.insertSnapshot.run(cluster.id, 'revisit', JSON.stringify(parsed.data));
@@ -327,6 +410,10 @@ function formatRevisit(cluster, data) {
       `${{ held: '🎯', failed: '❌', unclear: '⬜' }[c.verdict]} ${esc(c.source)}: "${esc(c.claim)}" — ${esc(c.note || '')}`)),
     ...((data.structural_verdicts || []).map((v) =>
       `${{ consistent: '🧭', inconsistent: '↩️', unclear: '⬜' }[v.verdict]} 구조(${esc(v.axis)}): ${esc(v.note || '')}`)),
+    ...((data.consulted_report_ids || []).length ? [``, `🗂 참고한 외부 보고서 ${data.consulted_report_ids.map((id) => `#${id}`).join(', ')}` +
+      ` (확인 ${(data.report_checks || []).filter((c) => c.status === 'confirmed').length}` +
+      ` · 반박 ${(data.report_checks || []).filter((c) => c.status === 'contradicted').length}` +
+      ` · 미확인 ${(data.report_checks || []).filter((c) => c.status === 'unverified').length})`] : []),
     ``,
     `💡 ${esc(data.lesson || '')}`,
   ].join('\n');
@@ -352,4 +439,5 @@ module.exports = {
   clusterQuery, revisitCluster,
   buildClusterPrompt, validateClusterOut, sanitizeClusterOut, normalizeAxis, framingGap, buildRevisitPrompt, validateRevisitOut,
   formatRevisit, formatPressTrack,
+  linkedReports, excerptReport, cleanReportChecks,
 };

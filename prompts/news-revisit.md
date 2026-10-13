@@ -18,7 +18,10 @@ JSON만 출력:
   "structural_verdicts": [
     { "axis": "당시 structural_hypotheses의 축", "verdict": "consistent|inconsistent|unclear", "note": "예상한 작동 경로와 실제 제도·정치 결과 비교" }
   ],
-  "lesson": "이 사건에서 다음에 기억할 것 한 문장 (프레이밍 패턴 관점)"
+  "lesson": "이 사건에서 다음에 기억할 것 한 문장 (프레이밍 패턴 관점)",
+  "report_checks": [
+    { "report_id": 0, "point": "외부 보고서의 핵심 주장 요지", "status": "confirmed|contradicted|unverified", "evidence": "네가 직접 확인한 근거 한 문장 (unverified면 무엇이 없었는지)" }
+  ]
 }
 
 규칙:
@@ -26,3 +29,4 @@ JSON만 출력:
 2. 모든 텍스트는 재서술 — 기사 원문 인용 금지.
 3. 당시 주장 목록에 없는 매체를 새로 만들지 마라.
 4. 구조적 가설은 인과를 확정하지 말고 일치·불일치·불명확만 판정한다. 당시 목록에 없는 축을 새로 만들지 마라.
+5. [외부 에이전트 보고서]가 주어지면 참고 힌트로만 쓴다. 관측소 판단이 아니며 정답도 아니다. 네가 현재 기사·지표로 직접 확인하지 못한 보고서 결론을 outcome_summary·verdict·lesson에 옮기지 마라. 보고서가 없으면 report_checks는 빈 배열.

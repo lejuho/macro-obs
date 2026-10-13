@@ -24,7 +24,10 @@ function reportTools(author = 'unknown') {
       description: [
         'get_events로 읽은 새 이벤트에 대한 분석 보고서를 macro-obs에 저장한다.',
         'body는 마크다운: 변화(무엇이 바뀌었나) · 근거(이벤트 id·수치) · 불확실성(무엇이 판정을 뒤집을 수 있나)을 구분해 적어라.',
-        'event_ids에는 이 보고서가 다룬 이벤트 id를 전부 넣어라 — 중복 보고 방지에 쓰인다.',
+        'event_ids에는 이 보고서가 다룬 이벤트 id를 전부 넣어라 — 중복 보고 방지와 뉴스 클러스터 연결에 쓰인다.',
+        'news_cluster(data.cluster_ids)·news_revisit(data.cluster_id) 이벤트를 넣으면 그 클러스터의 다음 클러스터링·90일 재방문에',
+        '"외부 에이전트 보고서(참고, 관측소 판단 아님)"로 발췌가 전달되어 사실 확인 힌트로 검증된다.',
+        '그러니 클러스터별 내용은 "### #<이벤트id> ..." 헤딩 아래에 적어라 — 해당 섹션만 발췌된다.',
         '저장 성공 응답을 받은 뒤에만 다음 폴링의 since_id를 until_id로 올려라.',
       ].join(' '),
       inputSchema: {
