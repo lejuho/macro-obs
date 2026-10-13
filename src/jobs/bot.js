@@ -105,7 +105,7 @@ async function handleMessage(msg) {
     const rows = stmts.newsClustersRecent.all(8).filter((c) => c.event_key);
     if (!rows.length) return send('클러스터 없음 — src/jobs/news.js 배치 실행 후.');
     return send(rows.map((c) =>
-      `${c.status === 'revisited' ? '📗' : '📘'} <b>${esc(c.title)}</b>\n  ${c.query} · 기사 ${c.items} (A ${c.a_cnt}·B ${c.b_cnt}) · ${c.first_seen.slice(0, 10)}~`).join('\n\n')
+      `${c.status === 'revisited' ? '📗' : '📘'} <b>${esc(c.title)}</b>\n  ${c.query} · 기사 ${c.items} (A ${c.a_cnt}·B ${c.b_cnt}·경제 ${c.e_cnt}) · ${c.first_seen.slice(0, 10)}~`).join('\n\n')
       + '\n\n📗=재방문 완료. 상세는 관측소.');
   }
   if (text === '/press') {

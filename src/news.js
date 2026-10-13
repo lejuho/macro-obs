@@ -167,7 +167,7 @@ function sanitizeClusterOut(data, itemIds) {
 /** 프레이밍이 비었는지 (축별·핵심 프레임 전무 + 주장 0) — 재방문 판정이 불가능해지는 스냅샷 */
 function framingGap(c) {
   const f = c.spectrum_frames || {};
-  const anyFrame = ['A', 'B', 'wire', 'unknown'].some((k) => f[k]) || !!c.core_frame;
+  const anyFrame = ['A', 'B', 'wire', 'econ', 'official', 'unknown'].some((k) => f[k]) || !!c.core_frame;
   return !anyFrame && !(c.notable_claims || []).length && !c.expected_development;
 }
 
@@ -524,6 +524,7 @@ function formatRevisit(cluster, data) {
     ...(fv.core ? [`핵심 프레임: ${mark(fv.core.held)} — ${esc(fv.core.note)}`] : []),
     ...(fv.A ? [`A축: ${mark(fv.A.held)} — ${esc(fv.A.note)}`] : []),
     ...(fv.B ? [`B축: ${mark(fv.B.held)} — ${esc(fv.B.note)}`] : []),
+    ...(fv.econ ? [`경제지: ${mark(fv.econ.held)} — ${esc(fv.econ.note)}`] : []),
     ``,
     ...((data.claim_verdicts || []).map((c) =>
       `${{ held: '🎯', failed: '❌', unclear: '⬜' }[c.verdict]} ${esc(c.source)}: "${esc(c.claim)}" — ${esc(c.note || '')}`)),

@@ -161,7 +161,7 @@ const MIGRATIONS = [
     title       TEXT NOT NULL,
     description TEXT,               -- API 제공 요약만. 본문 전문 저장 금지 (저작권)
     source      TEXT,               -- 매체명 (도메인 매핑)
-    spectrum    TEXT,               -- 'A'|'B'|'wire'|'unknown' (축 라벨 — data/press-map.js)
+    spectrum    TEXT,               -- 'A'|'B'|'wire'|'econ'|'official'|'unknown' (축 라벨 — data/press-map.js)
     pub_date    TEXT,
     query       TEXT NOT NULL,
     cluster_id  INTEGER REFERENCES news_clusters(id),
@@ -523,7 +523,8 @@ const stmts = {
   newsClustersRecent: db.prepare(`
     SELECT c.*, COUNT(i.id) AS items,
       SUM(CASE WHEN i.spectrum='A' THEN 1 ELSE 0 END) AS a_cnt,
-      SUM(CASE WHEN i.spectrum='B' THEN 1 ELSE 0 END) AS b_cnt
+      SUM(CASE WHEN i.spectrum='B' THEN 1 ELSE 0 END) AS b_cnt,
+      SUM(CASE WHEN i.spectrum='econ' THEN 1 ELSE 0 END) AS e_cnt
     FROM news_clusters c LEFT JOIN news_items i ON i.cluster_id = c.id
     GROUP BY c.id ORDER BY c.last_seen DESC LIMIT ?`),
   kvGet: db.prepare(`SELECT value FROM kv WHERE key = ?`),

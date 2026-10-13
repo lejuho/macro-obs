@@ -10,7 +10,8 @@ JSON만 출력:
   "frame_verdicts": {
     "core": { "held": true/false/null, "note": "당시 핵심 프레임·기대된 전개가 실제와 맞았나 한 문장 (기록 없으면 held=null)" },
     "A": { "held": true/false/null, "note": "당시 프레이밍이 유지됐나/뒤집혔나 한 문장" },
-    "B": { "held": true/false/null, "note": "..." }
+    "B": { "held": true/false/null, "note": "..." },
+    "econ": { "held": true/false/null, "note": "경제지 프레이밍 (당시 econ 프레임이 없으면 생략)" }
   },
   "claim_verdicts": [
     { "source": "매체명", "claim": "당시 주장 요지", "verdict": "held|failed|unclear", "note": "판정 근거 한 문장" }
