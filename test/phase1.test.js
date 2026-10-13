@@ -7,7 +7,7 @@ const fs = require('fs');
 if (fs.existsSync(process.env.DB_PATH)) fs.unlinkSync(process.env.DB_PATH);
 
 const { db, stmts } = require('../src/db');
-const { parseCommit, grade, targetDate, formatTrack } = require('../src/predictions');
+const { parseCommit, grade, targetDate, formatTrack, periodOf, pickGradingObs } = require('../src/predictions');
 
 let pass = 0, fail = 0;
 const assert = (c, n) => c ? (pass++, console.log(`  ✅ ${n}`)) : (fail++, console.log(`  ❌ ${n}`));
@@ -63,6 +63,25 @@ const g = grade(due[0], obs, due[0].target_date);
 assert(g.score === 'hit' && g.actual === 1512, 'graded hit with actual');
 stmts.gradePrediction.run(g.actual, g.score, predId);
 stmts.setAlertStatus.run('graded', alertId);
+
+console.log('3b. 월간 지표: 공표 지연 대기 → 기간 일치 관측으로 채점');
+assert(periodOf('M', '2026-10-18').start === '2026-10-01' && periodOf('M', '2026-12-05').end === '2027-01-01', 'periodOf M (연말 넘김)');
+assert(periodOf('Q', '2026-11-20').start === '2026-10-01' && periodOf('Q', '2026-11-20').end === '2027-01-01', 'periodOf Q');
+assert(periodOf('D', '2026-10-18') === null, 'periodOf D → null');
+const { id: caId } = stmts.upsertIndicator.get({
+  source: 'ecos', source_code: 'T/ca', name: 'T경상수지', freq: 'M', unit: '백만달러', category: 'macro', note: null,
+});
+stmts.upsertObs.run(caId, '2026-08-01', 46113);
+const mp = { id: 99, indicator_id: caId, freq: 'M', target_date: '2026-10-18', expected_low: 36000, expected_high: 41000 };
+let pk = pickGradingObs(stmts, mp, '2026-10-19');
+assert(pk.wait && pk.period === '2026-10-01', '10월분 미공표 → 대기 (예전엔 8월 관측이 14일 초과로 void)');
+pk = pickGradingObs(stmts, mp, '2027-03-01');
+assert(!pk.wait && pk.obs === null, '공표 지연 한도(120일) 초과 → void');
+stmts.upsertObs.run(caId, '2026-10-01', 39000);
+pk = pickGradingObs(stmts, mp, '2026-12-08');
+assert(pk.obs && pk.obs.value === 39000, '공표 후 10월분 관측 선택');
+assert(grade(mp, pk.obs, mp.target_date, 'M').score === 'hit', '월간: 기간 일치 관측은 staleness 무시하고 채점');
+assert(grade(mp, { date: '2026-08-01', value: 39000 }, mp.target_date).score === 'void', '일간 규칙(freq 생략)은 기존대로 stale void');
 
 console.log('4. 재촉(nag) 쿼리');
 const { id: a2 } = stmts.insertAlert.get({

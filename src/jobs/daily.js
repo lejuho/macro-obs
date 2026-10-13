@@ -10,7 +10,7 @@ const { scan: scanTriggers, formatFired } = require('../triggers');
 const { scan } = require('../watcher');
 const { send, alertKeyboard, formatBreach } = require('../notify/telegram');
 const { db, stmts } = require('../db');
-const { grade, formatTrack } = require('../predictions');
+const { grade, pickGradingObs, formatTrack } = require('../predictions');
 const { exposureSection, scenarioHints } = require('../exposure');
 const worldview = require('../worldview');
 
@@ -62,8 +62,10 @@ async function main() {
 
   // 3. 채점 (target_date 도래 예측)
   for (const p of stmts.dueForGrading.all()) {
-    const obs = stmts.obsOnOrBefore.get(p.indicator_id, p.target_date);
-    const g = grade(p, obs, p.target_date);
+    const pick = pickGradingObs(stmts, p);
+    if (pick.wait) { console.log(`  pred #${p.id}: ${pick.period} 관측 공표 대기`); continue; }
+    const obs = pick.obs;
+    const g = grade(p, obs, p.target_date, p.freq);
 
     if (g.score === 'manual') {
       // 자유 서술 → self-grade 요청. 답장 매칭을 위해 message_id 저장.
@@ -87,7 +89,7 @@ async function main() {
     await send([
       `${icon} <b>채점: ${g.score.toUpperCase()}</b> — ${esc(p.indicator_name)}`,
       `예측(${p.committed_at.slice(0, 10)}): "${esc(p.statement)}" [${p.expected_low}~${p.expected_high}]`,
-      `실제(${p.target_date}): ${g.actual ?? '결측'}`,
+      `실제(${pick.period ? `${pick.period.slice(0, 7)}분` : p.target_date}): ${g.actual ?? '결측'}`,
     ].join('\n'), { event: { kind: 'grade', data: {
       prediction_id: p.id, indicator: p.indicator_name, statement: p.statement,
       expected: [p.expected_low, p.expected_high], target_date: p.target_date, actual: g.actual, score: g.score,

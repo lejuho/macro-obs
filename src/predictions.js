@@ -43,18 +43,46 @@ function targetDate(from = new Date(), days = HORIZON_DAYS) {
  *   hit     — actual이 [low, high] 안
  *   partial — 밴드 폭의 10%만큼 확장한 밴드 안
  *   miss    — 그 외
- *   void    — actual 없음(관측이 target_date 기준 14일보다 오래됨/결측)
+ *   void    — actual 없음(일간: 관측이 target_date 기준 14일보다 오래됨/결측, 월/분기: 공표 지연 한도 초과)
  *   manual  — 자유 서술 예측 (self-grade 필요)
  * obs: { date, value } | null — target_date 이전 최신 관측
  */
-function grade(pred, obs, targetDateStr) {
+// 월/분기 지표의 공표 지연 허용 한도 — 이 기간이 지나도 해당 기간 관측이 없으면 void
+const PUBLICATION_LAG_DAYS = { M: 120, Q: 200 };
+
+/** 'M'|'Q' → target_date가 속한 기간 [start, end) (관측 date는 기간 첫날 'YYYY-MM-01' 규약). 일간이면 null */
+function periodOf(freq, dateStr) {
+  if (freq !== 'M' && freq !== 'Q') return null;
+  const [y, m] = dateStr.slice(0, 7).split('-').map(Number);
+  const m0 = freq === 'Q' ? Math.floor((m - 1) / 3) * 3 + 1 : m;
+  const span = freq === 'Q' ? 3 : 1;
+  const fmt = (yy, mm) => `${yy + Math.floor((mm - 1) / 12)}-${String(((mm - 1) % 12) + 1).padStart(2, '0')}-01`;
+  return { start: fmt(y, m0), end: fmt(y, m0 + span) };
+}
+
+/**
+ * 채점 대상 관측 선택.
+ *   일간: target_date 이전 최신 관측 (staleness는 grade()가 판정)
+ *   월/분기: target_date가 속한 기간의 관측. 아직 미공표면 { wait: true } — 공표 지연 한도 초과 시 null(void)
+ */
+function pickGradingObs(stmts, p, today = new Date().toISOString().slice(0, 10)) {
+  const per = periodOf(p.freq, p.target_date);
+  if (!per) return { obs: stmts.obsOnOrBefore.get(p.indicator_id, p.target_date) || null };
+  const obs = stmts.obsInPeriod.get(p.indicator_id, per.start, per.end);
+  if (obs) return { obs, period: per.start };
+  const waited = (new Date(today) - new Date(p.target_date)) / 86400_000;
+  return waited > PUBLICATION_LAG_DAYS[p.freq] ? { obs: null, period: per.start } : { wait: true, period: per.start };
+}
+
+function grade(pred, obs, targetDateStr, freq = 'D') {
   if (pred.expected_low == null || pred.expected_high == null) {
     return { score: 'manual', actual: obs ? obs.value : null };
   }
   if (!obs) return { score: 'void', actual: null };
 
+  // 월/분기 관측은 pickGradingObs가 기간 일치로 골랐으므로 staleness 판정 제외
   const staleness = (new Date(targetDateStr) - new Date(obs.date)) / 86400_000;
-  if (staleness > 14) return { score: 'void', actual: null };
+  if (!periodOf(freq, targetDateStr) && staleness > 14) return { score: 'void', actual: null };
 
   const { value } = obs;
   const lo = pred.expected_low, hi = pred.expected_high;
@@ -96,4 +124,4 @@ function formatTrack(rows) {
   return lines.join('\n');
 }
 
-module.exports = { parseCommit, targetDate, grade, formatTrack, HORIZON_DAYS };
+module.exports = { parseCommit, targetDate, grade, periodOf, pickGradingObs, formatTrack, HORIZON_DAYS, PUBLICATION_LAG_DAYS };

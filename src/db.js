@@ -418,7 +418,7 @@ const stmts = {
   setAlertStatus: db.prepare(`UPDATE alerts SET status = ? WHERE id = ?`),
   dueForGrading: db.prepare(`
     SELECT p.*, a.hypothesis_id, h.indicator_id, h.statement AS hyp_statement,
-           i.name AS indicator_name, i.unit
+           i.name AS indicator_name, i.unit, i.freq
     FROM predictions p
     JOIN alerts a ON a.id = p.alert_id
     JOIN hypotheses h ON h.id = a.hypothesis_id
@@ -427,6 +427,11 @@ const stmts = {
   obsOnOrBefore: db.prepare(`
     SELECT date, value FROM observations
     WHERE indicator_id = ? AND date <= ?
+    ORDER BY date DESC LIMIT 1`),
+  // 월/분기 지표: target_date가 속한 기간의 관측 (공표 지연 때문에 target_date 이후에야 생긴다)
+  obsInPeriod: db.prepare(`
+    SELECT date, value FROM observations
+    WHERE indicator_id = ? AND date >= ? AND date < ?
     ORDER BY date DESC LIMIT 1`),
   gradePrediction: db.prepare(`
     UPDATE predictions SET actual_value = ?, score = ?, graded_at = datetime('now')
