@@ -384,6 +384,14 @@ const stmts = {
     SELECT triggered_at FROM alerts
     WHERE hypothesis_id = ? AND kind = 'band_breach'
     ORDER BY triggered_at DESC LIMIT 1`),
+  openAlertForDirection: db.prepare(`
+    SELECT id FROM alerts
+    WHERE hypothesis_id = ? AND direction = ? AND kind = 'band_breach' AND status = 'open'
+    LIMIT 1`),
+  refreshAlert: db.prepare(`
+    UPDATE alerts SET observed_value = @observed_value, observed_date = @observed_date,
+      triggered_at = datetime('now'), nag_count = 0, last_nag_at = NULL
+    WHERE id = @id`),
   pendingPredictionForDirection: db.prepare(`
     SELECT p.id, p.statement, p.target_date
     FROM predictions p

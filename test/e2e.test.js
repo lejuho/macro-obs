@@ -51,6 +51,15 @@ assert(breaches[0].breach.observed_value === 1495, 'latest value reported');
 console.log('4. 쿨다운 내 재스캔 → 중복 알림 없음');
 assert(scan().length === 0, 'cooldown suppresses duplicate');
 
+console.log('4b. 쿨다운 경과 + 같은 방향 open 알림 → 새 알림 대신 기존 알림 갱신');
+db.prepare(`UPDATE alerts SET triggered_at = datetime('now', '-8 day'), nag_count = 3 WHERE id = ?`).run(breaches[0].alert_id);
+const again = scan();
+const nAlerts = db.prepare(`SELECT COUNT(*) AS n FROM alerts`).get().n;
+const refreshed = db.prepare(`SELECT * FROM alerts WHERE id = ?`).get(breaches[0].alert_id);
+assert(again.length === 1 && again[0].alert_id === breaches[0].alert_id && again[0].refreshed, '기존 alert id로 재발송');
+assert(nAlerts === 1 && refreshed.nag_count === 0, '중복 alert 없음 + nag 리셋');
+assert(scan().length === 0, '갱신 후 다시 쿨다운');
+
 const alertId = breaches[0].alert_id;
 stmts.insertPrediction.get({
   alert_id: alertId, statement: '1440~1570', expected_low: 1440, expected_high: 1570,

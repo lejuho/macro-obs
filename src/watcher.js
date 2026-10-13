@@ -43,6 +43,14 @@ function scan() {
     if (!breach) continue;
     if (stmts.pendingPredictionForDirection.get(hyp.id, breach.direction)) continue;
     if (inCooldown(hyp.id)) continue;
+    // 같은 방향 open 알림이 있으면 새로 만들지 않고 그 알림을 최신값으로 갱신해 재발송한다
+    // (예전엔 쿨다운 후 중복 알림이 생겨 하나만 커밋되고 나머지가 open으로 고아가 됐다)
+    const open = stmts.openAlertForDirection.get(hyp.id, breach.direction);
+    if (open) {
+      stmts.refreshAlert.run({ id: open.id, observed_value: breach.observed_value, observed_date: breach.observed_date });
+      created.push({ alert_id: open.id, hyp, breach, refreshed: true });
+      continue;
+    }
     const { id } = stmts.insertAlert.get({ hypothesis_id: hyp.id, ...breach });
     created.push({ alert_id: id, hyp, breach });
   }
