@@ -24,8 +24,9 @@ async function main() {
     if (r.skip) continue;
     record({ kind: 'news_cluster', data: r });
     console.log(r.ok
-      ? `  cluster "${r.query}": 신규 ${r.created} · 갱신 ${r.updated} · noise ${r.noise}`
+      ? `  cluster "${r.query}": 신규 ${r.created} · 갱신 ${r.updated} · noise ${r.noise}${r.deferred ? ` · 이월 ${r.deferred}` : ''}${r.framing_gaps ? ` · 프레임공백 ${r.framing_gaps}` : ''}${r.repaired ? ' · JSON수리' : ''}`
       : `  cluster "${r.query}": FAILED — ${r.reason}`);
+    for (const w of r.warnings || []) console.log(`    · ${w}`);
   }
 
   // 3. 90일 재방문 (하루 최대 3건 — 구독 한도 보호)

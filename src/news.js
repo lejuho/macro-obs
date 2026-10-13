@@ -30,11 +30,92 @@ function buildClusterPrompt(items, existingKeys, { agent = false, politicalConte
     P('news-cluster.md'),
     agent ? AGENT_CLUSTER_APPENDIX : '',
     existingKeys.length ? `기존 사건 키: ${existingKeys.join(', ')}` : '기존 사건 키: 없음',
+    // enum을 명시 — 이전엔 정치구조 JSON의 하위 키(regime, legislature…)를 축으로 오인해 쿼리 전체가 거부됐다
+    `[허용 국가 코드] ${COUNTRIES.map((c) => c.code).join(', ')} (이 밖의 나라는 countries에 넣지 마라)`,
+    `[허용 구조 축] ${AXES.join(', ')} (axis 값은 이 중 정확히 하나. 하위 필드명·국가명·자유 서술 금지)`,
     politicalContexts.length
-      ? `[관련 가능 국가의 시점별 정치구조 파라미터]\n${JSON.stringify(compactForPrompt(politicalContexts))}`
+      ? `[관련 가능 국가의 시점별 정치구조 파라미터] (참고 자료 — 이 JSON의 키는 구조 축 이름이 아니다)\n${JSON.stringify(compactForPrompt(politicalContexts))}`
       : '[관련 가능 국가의 정치구조 파라미터] 없음',
     '--- 기사 시작 ---', ...lines, '--- 기사 끝 ---',
   ].filter(Boolean).join('\n');
+}
+
+// LLM이 자주 내는 하위 필드명/별칭 → 축. 매핑 안 되는 축의 가설은 버린다(추측 매핑 금지).
+const AXIS_ALIASES = {
+  regime: 'power_structure', legislature: 'power_structure', executive: 'power_structure',
+  relation: 'government_status', divided_government: 'government_status', cohabitation: 'government_status',
+  election: 'election_cycle', elections: 'election_cycle', midterm: 'election_cycle', midterms: 'election_cycle',
+  parties: 'party_system', party: 'party_system',
+  media: 'information_environment', federalism: 'territorial_structure',
+};
+
+function normalizeAxis(axis) {
+  const raw = String(axis || '').trim();
+  if (AXES.includes(raw)) return raw;
+  // "electoral_system.legislature", "external_constraints: North_Korea" → 앞부분
+  const head = raw.split(/[.:\s(]/)[0].toLowerCase().replace(/-/g, '_');
+  if (AXES.includes(head)) return head;
+  if (AXIS_ALIASES[head]) return AXIS_ALIASES[head];
+  return null;
+}
+
+/**
+ * 관대한 정리: 사소한 enum 이탈 하나로 쿼리 전체(수십 건)를 버리지 않도록
+ * 알 수 없는 국가 코드는 제거, 구조 축은 정규화(불가 시 그 가설만 제거),
+ * event_key는 소문자화, 이중 배정은 첫 배정 유지, 미배정 id는 다음 배치로 넘긴다.
+ * 반환 { data, warnings, missing } — data는 사본.
+ */
+function sanitizeClusterOut(data, itemIds) {
+  const warnings = [];
+  if (!data || !Array.isArray(data.clusters)) return { data, warnings, missing: [] };
+  const countryCodes = new Set(COUNTRIES.map((c) => c.code));
+  const valid = new Set(itemIds);
+  const seen = new Set();
+  const take = (id, where) => {
+    if (!valid.has(id)) { warnings.push(`입력에 없는 id 무시(${where}): ${id}`); return false; }
+    if (seen.has(id)) { warnings.push(`id 이중 배정 → 첫 배정 유지: ${id}`); return false; }
+    seen.add(id); return true;
+  };
+  const clusters = data.clusters.map((c0) => {
+    const c = { ...c0 };
+    if (typeof c.event_key === 'string') {
+      const k = c.event_key.trim().toLowerCase().replace(/[\s_]+/g, '-');
+      if (k !== c.event_key) warnings.push(`event_key 정규화: ${c.event_key} → ${k}`);
+      c.event_key = k;
+    }
+    if (Array.isArray(c.member_ids)) c.member_ids = c.member_ids.filter((id) => take(id, c.event_key));
+    if (Array.isArray(c.countries)) {
+      const bad = c.countries.filter((x) => !countryCodes.has(x));
+      if (bad.length) warnings.push(`알 수 없는 국가 코드 제거(${c.event_key}): ${bad.join(',')}`);
+      c.countries = c.countries.filter((x) => countryCodes.has(x));
+    }
+    if (Array.isArray(c.structural_hypotheses)) {
+      c.structural_hypotheses = c.structural_hypotheses.flatMap((h) => {
+        const axis = normalizeAxis(h && h.axis);
+        if (!axis) { warnings.push(`구조 축 불명 → 가설 제거(${c.event_key}): ${h && h.axis}`); return []; }
+        if (axis !== h.axis) warnings.push(`구조 축 정규화: ${h.axis} → ${axis}`);
+        if (!h.mechanism || !h.expected_outcome || !['explicit', 'inferred'].includes(h.basis)) {
+          warnings.push(`구조 가설 형식 불량 → 제거(${c.event_key}): ${axis}`); return [];
+        }
+        return [{ ...h, axis }];
+      });
+    }
+    if (Array.isArray(c.notable_claims)) {
+      c.notable_claims = c.notable_claims.filter((cl) => cl && cl.source && cl.claim);
+    }
+    return c;
+  }).filter((c) => !Array.isArray(c.member_ids) || c.member_ids.length);
+  const noise_ids = (data.noise_ids || []).filter((id) => take(id, 'noise'));
+  const missing = itemIds.filter((id) => !seen.has(id));
+  if (missing.length) warnings.push(`미배정 ${missing.length}건 → 다음 배치로: ${missing.slice(0, 5).join(',')}`);
+  return { data: { ...data, clusters, noise_ids }, warnings, missing };
+}
+
+/** 프레이밍이 비었는지 (축별·핵심 프레임 전무 + 주장 0) — 재방문 판정이 불가능해지는 스냅샷 */
+function framingGap(c) {
+  const f = c.spectrum_frames || {};
+  const anyFrame = ['A', 'B', 'wire', 'unknown'].some((k) => f[k]) || !!c.core_frame;
+  return !anyFrame && !(c.notable_claims || []).length && !c.expected_development;
 }
 
 /** 순수 검증: 출력 구조 + 모든 id가 정확히 한 곳에 배정됐는지 */
@@ -80,16 +161,18 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
   const existing = stmts.recentClusters.all(query).map((c) => c.event_key);
   const queryConfig = QUERIES.find((q) => q.query === query) || {};
   const politicalContexts = resolveProfiles(queryConfig.countries || [], new Date());
-  const r = runLLM(buildClusterPrompt(items, existing, { agent, politicalContexts }),
-    { label: `cluster-${query}`, agent, servers: ['batch'] });
-  if (!r.ok) return { query, ok: false, reason: r.reason };
-
-  const parsed = llm.parseJson(r.text);
+  const parsed = llm.runJson(buildClusterPrompt(items, existing, { agent, politicalContexts }),
+    { runLLM, requireKey: 'clusters', label: `cluster-${query}`, agent, servers: ['batch'] });
   if (!parsed.ok) return { query, ok: false, reason: parsed.reason };
-  const v = validateClusterOut(parsed.data, items.map((i) => i.id));
-  if (!v.ok) return { query, ok: false, reason: v.reason };
 
-  let created = 0, updated = 0;
+  const itemIds = items.map((i) => i.id);
+  const clean = sanitizeClusterOut(parsed.data, itemIds);
+  parsed.data = clean.data;
+  const assigned = itemIds.filter((id) => !clean.missing.includes(id));
+  const v = validateClusterOut(parsed.data, assigned);
+  if (!v.ok) return { query, ok: false, reason: v.reason, warnings: clean.warnings };
+
+  let created = 0, updated = 0, gaps = 0;
   const itemById = new Map(items.map((item) => [item.id, item]));
   tx(() => {
     for (const c of parsed.data.clusters) {
@@ -119,6 +202,8 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
         const eventDate = eventDates[0] || new Date().toISOString();
         stmts.insertSnapshot.run(clusterId, 'initial', JSON.stringify({
           spectrum_frames: c.spectrum_frames || {}, notable_claims: c.notable_claims || [],
+          core_frame: c.core_frame || null, expected_development: c.expected_development || null,
+          ...(framingGap(c) ? (gaps++, { framing_gap: true }) : {}),
           country_codes: countryCodes,
           political_contexts: resolveProfiles(countryCodes, eventDate),
           structural_hypotheses: c.structural_hypotheses || [],
@@ -127,7 +212,12 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
     }
     for (const id of parsed.data.noise_ids || []) stmts.markNoise.run(id);
   });
-  return { query, ok: true, created, updated, noise: (parsed.data.noise_ids || []).length };
+  return {
+    query, ok: true, created, updated, noise: (parsed.data.noise_ids || []).length,
+    deferred: clean.missing.length, framing_gaps: gaps,
+    ...(parsed.repaired ? { repaired: true } : {}),
+    ...(clean.warnings.length ? { warnings: clean.warnings } : {}),
+  };
 }
 
 // ── 90일 재방문 ─────────────────────────────────────────
@@ -145,7 +235,13 @@ function buildRevisitPrompt(cluster, initial, recentItems, { agent = false, curr
     P('news-revisit.md'),
     agent ? AGENT_REVISIT_APPENDIX : '',
     `[당시 스냅샷] (${cluster.first_seen.slice(0, 10)})`,
-    `사건: ${cluster.title}`, `축별 프레이밍:\n${frames}`, `매체별 주장:\n${claims}`,
+    `사건: ${cluster.title}`,
+    `핵심 프레임: ${initial.core_frame || '(기록 없음)'}`,
+    `당시 기대된 전개: ${initial.expected_development || '(기록 없음)'}`,
+    `축별 프레이밍:\n${frames}`, `매체별 주장:\n${claims}`,
+    ...(initial.framing_gap || (!initial.core_frame && !frames.replace(/- \w+: \(없음\)\n?/g, '').trim())
+      ? ['[주의] 당시 프레이밍 기록이 비어 있다. 프레임·주장 판정은 null/unclear로 두고, 사건 제목 기준 실제 전개(outcome_summary)만 기술하라. 당시 프레임을 추정해 만들지 마라.']
+      : []),
     `[당시 정치구조]\n${JSON.stringify(initial.political_contexts || [])}`,
     `[현재 정치구조]\n${JSON.stringify(currentContexts)}`,
     `[당시 구조적 가설]\n${hypotheses}`,
@@ -192,10 +288,8 @@ async function revisitCluster(cluster, { runLLM = llm.run, fetchRecent, agent = 
     } catch { recent = []; }
   }
 
-  const r = runLLM(buildRevisitPrompt(cluster, initial, recent, { agent, currentContexts }),
-    { label: `revisit-${cluster.event_key}`, agent, servers: ['batch', 'obs'] });
-  if (!r.ok) return { cluster: cluster.event_key, ok: false, reason: r.reason };
-  const parsed = llm.parseJson(r.text);
+  const parsed = llm.runJson(buildRevisitPrompt(cluster, initial, recent, { agent, currentContexts }),
+    { runLLM, requireKey: 'outcome_summary', label: `revisit-${cluster.event_key}`, agent, servers: ['batch', 'obs'] });
   if (!parsed.ok) return { cluster: cluster.event_key, ok: false, reason: parsed.reason };
   const v = validateRevisitOut(parsed.data, initial.notable_claims, initial.structural_hypotheses);
   if (!v.ok) return { cluster: cluster.event_key, ok: false, reason: v.reason };
@@ -225,6 +319,7 @@ function formatRevisit(cluster, data) {
     ``,
     `<b>실제 전개:</b> ${esc(data.outcome_summary)}`,
     ``,
+    ...(fv.core ? [`핵심 프레임: ${mark(fv.core.held)} — ${esc(fv.core.note)}`] : []),
     ...(fv.A ? [`A축: ${mark(fv.A.held)} — ${esc(fv.A.note)}`] : []),
     ...(fv.B ? [`B축: ${mark(fv.B.held)} — ${esc(fv.B.note)}`] : []),
     ``,
@@ -255,6 +350,6 @@ function formatPressTrack() {
 
 module.exports = {
   clusterQuery, revisitCluster,
-  buildClusterPrompt, validateClusterOut, buildRevisitPrompt, validateRevisitOut,
+  buildClusterPrompt, validateClusterOut, sanitizeClusterOut, normalizeAxis, framingGap, buildRevisitPrompt, validateRevisitOut,
   formatRevisit, formatPressTrack,
 };
