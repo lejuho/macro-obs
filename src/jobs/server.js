@@ -117,7 +117,7 @@ const api = {
 // --- 공인망(클라우드플레어 터널) 게이트 ---
 // 터널 경유 판별: CF가 항상 붙이는 Cf-Connecting-Ip 헤더, 또는 docker 브리지(172.16/12)발 접속(cloudflared 컨테이너).
 // 터널 요청 인증: PUBLIC_API_TOKEN(고정 Bearer) 또는 OAuth access token(src/oauth.js). 둘 다 아니면 401 + WWW-Authenticate.
-// 경로 화이트리스트 + MCP는 읽기 도구(+OAuth macro.report 스코프면 보고서 도구)만. OAuth 엔드포인트는 무인증 공개.
+// 경로 화이트리스트 + MCP는 읽기 도구(+OAuth macro.report 스코프면 보고서 도구, macro.write면 전체+쓰기 도구)만. OAuth 엔드포인트는 무인증 공개.
 // 테일넷/LAN/localhost 요청은 기존대로 무인증.
 const PUBLIC_PATHS = new Set(['/api/events', '/api/track', '/api/reports', '/mcp']);
 const DOCKER_NET = /^(::ffff:)?172\.(1[6-9]|2\d|3[01])\./;
@@ -160,6 +160,8 @@ function mcpToolset(req, pub) {
     const client = db.prepare('SELECT client_name FROM oauth_clients WHERE client_id = ?').get(who.client_id);
     const author = `oauth:${client?.client_name || who.client_id}`;
     const reports = reportTools(author);
+    // macro.write: 로컬 stdio와 같은 전체 도구 (쓰기 도구는 origin=assisted로 기록)
+    if (scopes.includes('macro.write')) return [...TOOLS, ...WRITE_TOOLS, ...reports];
     return [
       ...(scopes.includes('macro.read') ? [...pubRead, reports.find((t) => t.name === 'get_reports')] : []),
       ...(scopes.includes('macro.report') ? reports.filter((t) => t.name === 'save_report') : []),

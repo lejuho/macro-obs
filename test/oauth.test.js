@@ -122,6 +122,30 @@ function accessJwt(claims = {}) {
   const rep = await (await fetch(base + '/api/reports', { headers: { ...PUB, Authorization: `Bearer ${t2.access_token}` } })).json();
   assert(rep.reports.length === 2, '/api/reports (OAuth)');
 
+  console.log('6b. macro.write — 승인 화면 체크로만 부여');
+  const writeUrl = authUrl.replace('scope=macro.read%20macro.report', 'scope=macro.read%20macro.report%20macro.write');
+  const grant = async (body) => {
+    const pg = await (await fetch(base + writeUrl, { headers: { ...PUB, 'Cf-Access-Jwt-Assertion': accessJwt() } })).text();
+    const r = pg.match(/name="rid" value="([^"]+)"/)[1];
+    const ap = await fetch(base + '/oauth/authorize', { method: 'POST', redirect: 'manual',
+      headers: { ...PUB, 'Content-Type': 'application/x-www-form-urlencoded', 'Cf-Access-Jwt-Assertion': accessJwt() }, body: `rid=${r}&decision=approve${body}` });
+    const c = new URL(ap.headers.get('location')).searchParams.get('code');
+    return { page: pg, tok: await (await tok({ grant_type: 'authorization_code', code: c, client_id: reg.client_id, code_verifier: verifier, redirect_uri: 'https://agent.example.com/cb' })).json() };
+  };
+  const noTick = await grant('');
+  assert(!noTick.tok.scope.includes('macro.write') && noTick.page.includes('name="write"'), '요청만으로는 write 미부여 (체크박스 표시)');
+  assert(!(await toolNames({ Authorization: `Bearer ${noTick.tok.access_token}` })).includes('commit_prediction'), '미체크: 쓰기 도구 없음');
+  const ticked = await grant('&write=1');
+  assert(ticked.tok.scope.split(' ').includes('macro.write'), '체크 → macro.write 부여');
+  const wTools = await toolNames({ Authorization: `Bearer ${ticked.tok.access_token}` });
+  assert(['get_status', 'commit_prediction', 'revise_hypothesis', 'add_trigger', 'save_report', 'get_reports'].every((n) => wTools.includes(n)), 'write: 전체+쓰기 도구');
+  const wr = await (await tok({ grant_type: 'refresh_token', refresh_token: ticked.tok.refresh_token, client_id: reg.client_id, scope: 'macro.read macro.report macro.write' })).json();
+  assert(wr.scope.split(' ').includes('macro.write'), 'refresh(스코프 명시)에도 write 유지');
+  const wr2 = await (await tok({ grant_type: 'refresh_token', refresh_token: wr.refresh_token, client_id: reg.client_id })).json();
+  assert(wr2.scope.includes('macro.write'), 'refresh(스코프 생략)에도 write 유지');
+  const up = await (await tok({ grant_type: 'refresh_token', refresh_token: noTick.tok.refresh_token, client_id: reg.client_id, scope: 'macro.read macro.write' })).json();
+  assert(!up.scope.includes('macro.write'), 'refresh로 write 승격 불가');
+
   console.log('7. 게이트 회귀');
   assert((await fetch(base + '/api/status', { headers: { ...PUB, Authorization: `Bearer ${t2.access_token}` } })).status === 403, 'OAuth로도 /api/status 403');
   assert((await fetch(base + '/api/status')).status === 200, '로컬 무인증 유지');

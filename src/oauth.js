@@ -11,7 +11,14 @@ const ACCESS_TTL = 3600;            // 1시간
 const REFRESH_TTL = 90 * 86400;     // 90일 (사용할 때마다 회전)
 const CODE_TTL = 300;               // 5분
 const PENDING_TTL = 600_000;        // 승인 화면 대기 10분
-const SCOPES = ['macro.read', 'macro.report'];
+const SCOPES = ['macro.read', 'macro.report', 'macro.write'];
+// macro.write(가설·예측 쓰기)는 요청만으로 부여하지 않는다 — 승인 화면에서 소유자가 체크해야 붙는다.
+const DEFAULT_SCOPES = ['macro.read', 'macro.report'];
+const SCOPE_LABEL = {
+  'macro.read': '이벤트·트랙레코드·뉴스 읽기',
+  'macro.report': '분석 보고서 저장(save_report)',
+  'macro.write': '관측소 전체 읽기 + 예측 커밋·가설 수정·트리거 추가 (origin=assisted)',
+};
 const MAX_CLIENTS = 200;
 
 const base = () => (process.env.PUBLIC_BASE_URL || 'https://macro.lee-blog.me').replace(/\/$/, '');
@@ -83,8 +90,8 @@ function issueTokens(client_id, scope, owner) {
 
 function normalizeScope(s) {
   const asked = String(s || '').split(/\s+/).filter(Boolean);
-  const granted = asked.length ? asked.filter((x) => SCOPES.includes(x)) : SCOPES;
-  return (granted.length ? granted : SCOPES).join(' ');
+  const granted = asked.filter((x) => DEFAULT_SCOPES.includes(x));
+  return (granted.length ? granted : DEFAULT_SCOPES).join(' ');
 }
 
 function validRedirect(u) {
@@ -191,9 +198,10 @@ async function handleAuthorize(req, res, url) {
     return html(res, 200, `<h1>macro-obs 연결 승인</h1>
 <dl><dt>앱</dt><dd>${esc(r.client.client_name || '(이름 없음)')}</dd>
 <dt>돌아갈 주소</dt><dd>${esc(new URL(r.redirect_uri).origin)}</dd>
-<dt>권한</dt><dd>${r.scope.split(' ').map((s) => s === 'macro.read' ? '이벤트·트랙레코드·뉴스 읽기' : '분석 보고서 저장(save_report)').join('<br>')}</dd>
+<dt>권한</dt><dd>${r.scope.split(' ').map((s) => SCOPE_LABEL[s]).join('<br>')}</dd>
 <dt>승인자</dt><dd>${esc(owner)}</dd></dl>
 <form method="post" action="/oauth/authorize"><input type="hidden" name="rid" value="${rid}">
+<p><label><input type="checkbox" name="write" value="1"> 쓰기 권한도 부여: ${SCOPE_LABEL['macro.write']}</label></p>
 <button class="ok" name="decision" value="approve">승인</button><button name="decision" value="deny">거부</button></form>`);
   }
 
@@ -210,6 +218,7 @@ async function handleAuthorize(req, res, url) {
       u.searchParams.set('error', 'access_denied');
     } else {
       const code = rand();
+      if (p.write === '1') pend.scope = `${pend.scope} macro.write`;
       q.insCode.run(sha(code), pend.client_id, pend.redirect_uri, pend.code_challenge, pend.scope, pend.resource, owner, nowSec() + CODE_TTL);
       u.searchParams.set('code', code);
       require('./events').record({ source: 'oauth', kind: 'oauth_grant', data: { client_id: pend.client_id, client_name: pend.client.client_name, scope: pend.scope } });
@@ -257,7 +266,8 @@ async function handleToken(req, res) {
     const row = q.token.get(h, 'refresh', nowSec());
     if (!row || row.client_id !== client.client_id) return oerr(res, 400, 'invalid_grant');
     q.revoke.run(h); // 회전: 쓴 refresh token은 폐기
-    const scope = p.scope ? normalizeScope(p.scope).split(' ').filter((s) => row.scope.split(' ').includes(s)).join(' ') || row.scope : row.scope;
+    // refresh는 기존 부여 범위 안에서만 축소 가능 (macro.write 포함 — normalizeScope는 신규 요청용이라 쓰지 않음)
+    const scope = p.scope ? String(p.scope).split(/\s+/).filter((s) => row.scope.split(' ').includes(s)).join(' ') || row.scope : row.scope;
     return json(res, 200, issueTokens(client.client_id, scope, row.owner));
   }
   return oerr(res, 400, 'unsupported_grant_type');
