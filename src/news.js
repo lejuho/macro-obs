@@ -390,6 +390,125 @@ async function revisitCluster(cluster, { runLLM = llm.run, fetchRecent, agent = 
   return { cluster: cluster.event_key, ok: true, verdicts: (parsed.data.claim_verdicts || []).length, data: parsed.data };
 }
 
+// ── 재검토 (재방문 이후 도착한 외부 보고서) ──────────────
+// 보고서는 재방문 이벤트를 본 뒤에 쓰이므로 그 재방문에는 반영될 수 없다. 재방문 뒤 새로 연결된(아직 참조 안 한)
+// 보고서가 있으면 이전 재방문 결과를 놓고 한 번 더 검토한다.
+// 자기확증 방지: 판정 변경은 모델이 직접 확인한 근거(evidence)가 있어야 하고, 이전 결과와의 차이는 코드가 계산한다.
+// 루프 방지: 클러스터당 재검토 최대 REREVIEW_MAX회 (재검토 결과에 다시 보고서가 붙어도 무한히 돌지 않음).
+const REREVIEW_MAX = 2;
+
+const revisitSnapshots = db.prepare(`
+  SELECT id, content_json, created_at FROM framing_snapshots
+  WHERE cluster_id = ? AND phase = 'revisit' ORDER BY id`);
+const clustersWithReports = db.prepare(`
+  SELECT DISTINCT c.* FROM news_clusters c
+  WHERE c.status = 'revisited' AND EXISTS (
+    SELECT 1 FROM reports r, json_each(r.event_ids_json) j JOIN events e ON e.id = j.value
+    WHERE (e.kind = 'news_revisit' AND json_extract(e.data_json, '$.cluster_id') = c.id)
+       OR (e.kind = 'news_cluster' AND EXISTS (
+            SELECT 1 FROM json_each(e.data_json, '$.cluster_ids') k WHERE k.value = c.id)))
+  ORDER BY c.id`);
+
+/** 재검토 대상: revisited 클러스터 중 아직 어떤 재방문·재검토에서도 참조하지 않은 연결 보고서가 있는 것 */
+function dueRereview(limit = 2) {
+  const out = [];
+  for (const c of clustersWithReports.all()) {
+    const snaps = revisitSnapshots.all(c.id).map((r) => ({ id: r.id, data: JSON.parse(r.content_json) }));
+    if (!snaps.length) continue;
+    if (snaps.filter((x) => x.data.rereview_of).length >= REREVIEW_MAX) continue;
+    const consulted = new Set(snaps.flatMap((x) => x.data.consulted_report_ids || []));
+    const fresh = linkedReports(c.id).filter((r) => !consulted.has(r.id));
+    if (!fresh.length) continue;
+    out.push({ cluster: c, previous: snaps[snaps.length - 1], reports: fresh });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** 순수: 이전 재방문 대비 판정 차이 (코드가 계산 — 모델의 자기 보고와 대조용) */
+function diffRevisit(prev, next) {
+  const diff = [];
+  for (const k of new Set([...Object.keys(prev.frame_verdicts || {}), ...Object.keys(next.frame_verdicts || {})])) {
+    const a = prev.frame_verdicts?.[k]?.held ?? null, b = next.frame_verdicts?.[k]?.held ?? null;
+    if (a !== b) diff.push({ field: `frame.${k}`, before: a, after: b });
+  }
+  const key = (v) => `${v.source}|${v.claim}`;
+  const before = new Map((prev.claim_verdicts || []).map((v) => [key(v), v.verdict]));
+  for (const v of next.claim_verdicts || []) {
+    if (before.has(key(v)) && before.get(key(v)) !== v.verdict) diff.push({ field: `claim.${v.source}`, before: before.get(key(v)), after: v.verdict });
+  }
+  const sb = new Map((prev.structural_verdicts || []).map((v) => [v.axis, v.verdict]));
+  for (const v of next.structural_verdicts || []) {
+    if (sb.has(v.axis) && sb.get(v.axis) !== v.verdict) diff.push({ field: `structural.${v.axis}`, before: sb.get(v.axis), after: v.verdict });
+  }
+  return diff;
+}
+
+const REREVIEW_APPENDIX = (previous) => `
+[재검토 모드] 이 사건은 이미 90일 재방문을 마쳤다. 아래 [이전 재방문 결과]는 그때의 판정이고,
+[외부 에이전트 보고서]는 그 뒤에 도착한 메모다. 보고서가 지적한 점을 현재 기사·지표·검색으로 직접 확인해 이전 판정을 유지하거나 고쳐라.
+- 출력은 위 스키마 전체(이전 판정을 유지하는 항목도 그대로 다시 적는다) + "changes_from_previous" 배열.
+- changes_from_previous: [{ "field": "frame.core|claim.<매체>|structural.<축>|outcome_summary", "before": ..., "after": ..., "evidence": "네가 직접 확인한 근거 한 문장" }]
+- 보고서 주장만으로 판정을 바꾸지 마라. 직접 확인하지 못했으면 이전 판정을 유지하고 report_checks에 unverified로 남겨라.
+- 바꿀 것이 없으면 changes_from_previous는 빈 배열.
+[이전 재방문 결과]
+${JSON.stringify(previous, null, 1).slice(0, 6000)}`;
+
+/** 재검토 1건. due = dueRereview() 원소 */
+async function rereviewCluster(due, { runLLM = llm.run, fetchRecent, agent = false } = {}) {
+  const { cluster, previous, reports } = due;
+  const snap = stmts.snapshotFor.get(cluster.id, 'initial');
+  if (!snap) return { cluster: cluster.event_key, skip: 'no initial snapshot' };
+  const initial = JSON.parse(snap.content_json);
+  let countryCodes = initial.country_codes || [];
+  if (!countryCodes.length) { try { countryCodes = JSON.parse(cluster.countries_json || '[]'); } catch { countryCodes = []; } }
+  const currentContexts = resolveProfiles(countryCodes, new Date());
+  let recent = [];
+  if (fetchRecent) recent = await fetchRecent(cluster);
+  else {
+    try {
+      const { search, parseItems } = require('./collectors/naver');
+      recent = parseItems(await search(cluster.title.slice(0, 30), 20), cluster.query).slice(0, 20);
+    } catch { recent = []; }
+  }
+  const prev = previous.data;
+  const prompt = buildRevisitPrompt(cluster, initial, recent, { agent, currentContexts, reports })
+    + '\n\n' + REREVIEW_APPENDIX(prev);
+  const parsed = llm.runJson(prompt,
+    { runLLM, requireKey: 'outcome_summary', label: `rereview-${cluster.event_key}`, agent, servers: ['batch', 'obs'] });
+  if (!parsed.ok) return { cluster: cluster.event_key, ok: false, reason: parsed.reason };
+  const data = parsed.data;
+  const v = validateRevisitOut(data, initial.notable_claims, initial.structural_hypotheses);
+  if (!v.ok) return { cluster: cluster.event_key, ok: false, reason: v.reason };
+  cleanReportChecks(data, reports.map((r) => r.id));
+
+  const diff = diffRevisit(prev, data);
+  const changes = (Array.isArray(data.changes_from_previous) ? data.changes_from_previous : [])
+    .filter((c) => c && c.field && String(c.evidence || '').trim());
+  // 판정이 바뀌었는데 근거 있는 변경 기록이 없으면 이전 판정 유지 (보고서 결론의 무근거 복사 차단)
+  const accepted = !diff.length || changes.length > 0;
+  const stored = accepted ? data : { ...prev, report_checks: data.report_checks };
+  Object.assign(stored, {
+    consulted_report_ids: reports.map((r) => r.id),
+    rereview_of: previous.id,
+    changes_from_previous: accepted ? changes : [],
+    diff: accepted ? diff : [],
+    ...(accepted ? {} : { rejected_diff: diff, rejected_reason: '근거(evidence) 있는 변경 기록 없이 판정이 바뀜 — 이전 판정 유지' }),
+  });
+
+  tx(() => {
+    stmts.insertSnapshot.run(cluster.id, 'revisit', JSON.stringify(stored));
+    // 언론사 트랙레코드는 최신 판정 기준 (이전 판정은 이전 revisit 스냅샷에 보존)
+    if (accepted && diff.some((d) => d.field.startsWith('claim.'))) {
+      db.prepare('DELETE FROM press_track WHERE cluster_id = ?').run(cluster.id);
+      for (const cv of stored.claim_verdicts || []) {
+        stmts.insertPressTrack.run({ cluster_id: cluster.id, source: cv.source, claim: cv.claim, verdict: cv.verdict, note: cv.note || null });
+      }
+    }
+  });
+  return { cluster: cluster.event_key, ok: true, accepted, changed: accepted ? diff.length : 0, data: stored };
+}
+
 // ── 포맷터 ──────────────────────────────────────────────
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -419,6 +538,20 @@ function formatRevisit(cluster, data) {
   ].join('\n');
 }
 
+function formatRereview(cluster, data) {
+  const head = `🔁 <b>재검토: ${esc(cluster.title)}</b> — 외부 보고서 ${(data.consulted_report_ids || []).map((id) => `#${id}`).join(', ')} 도착 후`;
+  const changes = data.changes_from_previous || [];
+  const body = data.rejected_reason
+    ? [`⚠️ ${esc(data.rejected_reason)}`, ...(data.rejected_diff || []).map((d) => `· (기각) ${esc(d.field)}: ${esc(d.before)} → ${esc(d.after)}`)]
+    : changes.length
+      ? changes.map((c) => `· ${esc(c.field)}: ${esc(c.before)} → ${esc(c.after)} — ${esc(c.evidence)}`)
+      : ['판정 변경 없음 (이전 재방문 유지)'];
+  const checks = data.report_checks || [];
+  return [head, '', ...body, '',
+    ...checks.map((c) => `${{ confirmed: '✅', contradicted: '❌', unverified: '⬜' }[c.status]} 보고서 #${c.report_id}: ${esc(c.point)}${c.evidence ? ` — ${esc(c.evidence)}` : ''}`),
+  ].join('\n');
+}
+
 function formatPressTrack() {
   const rows = stmts.pressTrackAgg.all();
   if (!rows.length) return '언론사 트랙레코드 없음 — 첫 클러스터의 90일 재방문 이후 쌓인다.';
@@ -436,7 +569,7 @@ function formatPressTrack() {
 }
 
 module.exports = {
-  clusterQuery, revisitCluster,
+  clusterQuery, revisitCluster, dueRereview, rereviewCluster, diffRevisit, formatRereview,
   buildClusterPrompt, validateClusterOut, sanitizeClusterOut, normalizeAxis, framingGap, buildRevisitPrompt, validateRevisitOut,
   formatRevisit, formatPressTrack,
   linkedReports, excerptReport, cleanReportChecks,

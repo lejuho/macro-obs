@@ -504,5 +504,9 @@ OAuth만 지원하는 에이전트용. `src/oauth.js` = 인가 서버(MCP Author
 - 승인 화면 `/oauth/authorize`는 Cloudflare Access(이메일 로그인) 뒤. 서버가 `Cf-Access-Jwt-Assertion`을 팀 공개키로 검증 + `OAUTH_OWNER_EMAIL` 일치 확인 (`src/cf-access.js`). env 미설정이면 승인 불가(fail closed)
 - 스코프: `macro.read`(get_events·get_track·search_news·get_reports) / `macro.report`(save_report). 가설·예측 쓰기 도구는 OAuth로 노출 안 함
 - 보고서: `reports` 테이블, author는 서버가 OAuth 클라이언트명으로 주입. 조회 `GET /api/reports`, MCP `get_reports`
+- 보고서 → 뉴스 파이프라인: `event_ids`가 가리키는 `news_revisit`/`news_cluster` 이벤트로만 클러스터에 연결. 재방문·클러스터링에 "참고, 관측소 판단 아님" 발췌로 들어간다
+- 재검토: 재방문 **뒤에** 도착한 미참조 보고서가 있으면 뉴스 배치가 이전 판정을 놓고 재검토 (하루 2건, 클러스터당 최대 2회).
+  판정 변경은 모델이 직접 확인한 evidence가 있을 때만 반영, 차이는 코드가 계산(`diff`), 근거 없으면 이전 판정 유지(`rejected_diff`).
+  이전 재방문 스냅샷은 보존되고 press_track만 최신 판정으로 교체
 - 연결 끊기: `sqlite3 $DB_PATH "UPDATE oauth_tokens SET revoked=1 WHERE client_id='mo_...'"` (클라이언트 목록은 `oauth_clients`)
 - 테스트: `node --no-warnings test/oauth.test.js`

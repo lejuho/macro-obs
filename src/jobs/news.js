@@ -3,7 +3,7 @@
 //   30 21 * * *  cd /home/pi/macro-obs && /usr/bin/node --no-warnings --no-network-family-autoselection src/jobs/news.js >> log/news.log 2>&1
 
 const { collect } = require('../collectors/naver');
-const { clusterQuery, revisitCluster, formatRevisit } = require('../news');
+const { clusterQuery, revisitCluster, formatRevisit, dueRereview, rereviewCluster, formatRereview } = require('../news');
 const { send } = require('../notify/telegram');
 const { record } = require('../events');
 const { stmts } = require('../db');
@@ -37,6 +37,17 @@ async function main() {
     console.log(`  revisit ${r.cluster}: ${r.verdicts} claims graded`);
     await send(formatRevisit(c, r.data), {
       event: { kind: 'news_revisit', data: { cluster_id: c.id, title: c.title, review: r.data } },
+    }).catch((e) => console.error('send:', e.message));
+  }
+
+  // 4. 재검토: 재방문 뒤 도착한 외부 보고서 (하루 최대 2건, 클러스터당 최대 2회)
+  for (const due of dueRereview(2)) {
+    const r = await rereviewCluster(due, { agent: AGENT });
+    if (r.skip) continue;
+    if (!r.ok) { console.log(`  rereview ${r.cluster}: FAILED — ${r.reason}`); continue; }
+    console.log(`  rereview ${r.cluster}: ${r.accepted ? `변경 ${r.changed}` : '변경 기각(근거 없음)'}`);
+    await send(formatRereview(due.cluster, r.data), {
+      event: { kind: 'news_revisit', data: { cluster_id: due.cluster.id, title: due.cluster.title, rereview: true, review: r.data } },
     }).catch((e) => console.error('send:', e.message));
   }
 
