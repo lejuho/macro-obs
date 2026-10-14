@@ -104,5 +104,17 @@ console.log('7. clusterQuery — 실패 시 거부 사유를 붙여 1회 재시�
   assert(!r2.ok && calls === 2 && r2.reason.includes('2회 시도'), '호출 실패 2회 → 실패 보고(무한 재시도 없음)');
 }
 
+console.log('8. clusterQuery 소급 모드 — 주어진 기사·사건 날짜로 first_seen');
+{
+  const q3 = '경상수지';
+  stmts.insertNewsItem.run({ link: 'https://x.com/o1', title: '지난 기사', description: 'd', source: '기타', spectrum: 'unknown', pub_date: '2026-10-06T08:00:00.000Z', query: q3 });
+  const oid = db.prepare(`SELECT id FROM news_items WHERE link = 'https://x.com/o1'`).get().id;
+  const items = db.prepare(`SELECT * FROM news_items WHERE id = ?`).all(oid);
+  const outB = { clusters: [{ event_key: 'backfill-case-2026-10', title: '소급', member_ids: [oid], core_frame: 'f', countries: ['KR'], spectrum_frames: {}, notable_claims: [], structural_hypotheses: [] }], noise_ids: [] };
+  const r3 = news.clusterQuery(q3, () => ({ ok: true, text: JSON.stringify(outB) }), { items, asOf: '2026-10-06T08:00:00.000Z' });
+  const row = stmts.clusterByKey.get('backfill-case-2026-10');
+  assert(r3.ok && row.first_seen === '2026-10-06 08:00:00' && row.last_seen === '2026-10-06 08:00:00', '소급: first_seen/last_seen = 기사 날짜');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

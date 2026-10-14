@@ -208,11 +208,12 @@ function validateClusterOut(data, itemIds) {
 }
 
 /** 쿼리 1개분 클러스터링 실행. runLLM 주입 가능 (기본 llm.run) */
-function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
-  const items = stmts.unclusteredItems.all(query);
+function clusterQuery(query, runLLM = llm.run, { agent = false, items: givenItems, asOf } = {}) {
+  // asOf(ISO) = 소급 모드: 주어진 기사로, 그 시점 주변 클러스터를 맥락으로, 사건 날짜로 기록
+  const items = givenItems || stmts.unclusteredItems.all(query);
   if (!items.length) return { query, skip: 'no items' };
 
-  const recentRows = stmts.recentClusters.all(query);
+  const recentRows = asOf ? stmts.clustersAround.all(query, asOf, asOf) : stmts.recentClusters.all(query);
   const existing = recentRows.map((c) => c.event_key);
   const reportNotes = [];
   for (const c of recentRows) {
@@ -251,16 +252,20 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
       let clusterId;
       const countryCodes = [...new Set(c.countries || [])];
       const countriesJson = JSON.stringify(countryCodes);
+      const memberDates = c.member_ids.map((id) => itemById.get(id)?.pub_date).filter(Boolean).sort();
+      const sqlTs = (iso) => new Date(iso).toISOString().slice(0, 19).replace('T', ' ');
       if (row) {
         clusterId = row.id;
-        stmts.touchCluster.run(clusterId);
+        if (asOf) stmts.touchClusterAt.run(sqlTs(memberDates.at(-1) || asOf), clusterId);
+        else stmts.touchCluster.run(clusterId);
         if (countryCodes.length) stmts.setClusterCountries.run(countriesJson, clusterId);
         updated++;
       }
       else {
-        clusterId = stmts.insertCluster.get({
-          event_key: c.event_key, title: c.title, query, countries_json: countriesJson,
-        }).id;
+        const base = { event_key: c.event_key, title: c.title, query, countries_json: countriesJson };
+        clusterId = asOf
+          ? stmts.insertClusterAt.get({ ...base, first_seen: sqlTs(memberDates[0] || asOf), last_seen: sqlTs(memberDates.at(-1) || asOf) }).id
+          : stmts.insertCluster.get(base).id;
         created++;
       }
       clusterIds.add(clusterId);

@@ -502,6 +502,16 @@ const stmts = {
     VALUES (@event_key, @title, @query, @countries_json)
     RETURNING id`),
   touchCluster: db.prepare(`UPDATE news_clusters SET last_seen = datetime('now') WHERE id = ?`),
+  // 소급 클러스터링: 사건 날짜(기사 pub_date) 기준으로 first_seen/last_seen — 90일 재방문 시점이 실제 사건에 맞도록
+  insertClusterAt: db.prepare(`
+    INSERT INTO news_clusters (event_key, title, query, countries_json, first_seen, last_seen)
+    VALUES (@event_key, @title, @query, @countries_json, @first_seen, @last_seen)
+    RETURNING id`),
+  touchClusterAt: db.prepare(`UPDATE news_clusters SET last_seen = max(last_seen, ?) WHERE id = ?`),
+  clustersAround: db.prepare(`
+    SELECT * FROM news_clusters WHERE query = ?
+    AND last_seen >= datetime(?, '-14 day') AND first_seen <= datetime(?, '+3 day')
+    ORDER BY last_seen DESC LIMIT 15`),
   setClusterCountries: db.prepare(`UPDATE news_clusters SET countries_json = ? WHERE id = ?`),
   assignCluster: db.prepare(`UPDATE news_items SET cluster_id = ? WHERE id = ?`),
   insertSnapshot: db.prepare(`
