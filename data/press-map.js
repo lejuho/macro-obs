@@ -41,11 +41,12 @@ module.exports = {
     'einfomax.co.kr': { name: '연합인포맥스', spectrum: 'wire' },
     'newspim.com': { name: '뉴스핌', spectrum: 'wire' },
     // 2026-10-15 재배치: 세계·국민·아시아투데이·매일 → A, 한국일보·JTBC·뉴스토마토 → B, SBS·OBS → wire, IT·코인 매체 → econ
+    // 서울신문 → wire (중도·사실보도 중심, A/B 양끝 아님). 시사저널은 기사별 성향 평가가 갈려 unknown 유지
     // ── 매체명만 식별, 성향 미분류 (경제·산업·IT·지역·코인 매체 등 — 배치는 사용자 판단) ──
     'sbs.co.kr': { name: 'SBS', spectrum: 'wire' },
     'jtbc.co.kr': { name: 'JTBC', spectrum: 'B' },
     'hankookilbo.com': { name: '한국일보', spectrum: 'B' },
-    'seoul.co.kr': { name: '서울신문', spectrum: 'unknown' },
+    'seoul.co.kr': { name: '서울신문', spectrum: 'wire' },
     'segye.com': { name: '세계일보', spectrum: 'A' },
     'kmib.co.kr': { name: '국민일보', spectrum: 'A' },
     'sedaily.com': { name: '서울경제', spectrum: 'econ' },
