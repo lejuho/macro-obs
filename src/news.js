@@ -17,6 +17,7 @@ const P = (f) => fs.readFileSync(path.join(__dirname, '..', 'prompts', f), 'utf8
 const REPORT_MAX = 3;               // 재방문에 넣을 보고서 수
 const REPORT_EXCERPT = 1500;        // 재방문용 보고서당 발췌 상한(자)
 const CLUSTER_NOTE_EXCERPT = 300;   // 클러스터링용 메모 발췌 상한(자)
+const CLUSTER_ATTEMPTS = 2;        // 클러스터링 실패(호출·파싱·검증) 시 거부 사유를 붙여 재시도 — 실패 쿼리 기사는 2일 창이 지나면 영영 미배정
 const CLUSTER_NOTE_MAX = 5;         // 클러스터링 프롬프트에 넣을 메모 수
 
 const linkedReportRows = db.prepare(`
@@ -221,16 +222,25 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
   }
   const queryConfig = QUERIES.find((q) => q.query === query) || {};
   const politicalContexts = resolveProfiles(queryConfig.countries || [], new Date());
-  const parsed = llm.runJson(buildClusterPrompt(items, existing, { agent, politicalContexts, reportNotes }),
-    { runLLM, requireKey: 'clusters', label: `cluster-${query}`, agent, servers: ['batch'] });
-  if (!parsed.ok) return { query, ok: false, reason: parsed.reason };
-
+  const basePrompt = buildClusterPrompt(items, existing, { agent, politicalContexts, reportNotes });
   const itemIds = items.map((i) => i.id);
-  const clean = sanitizeClusterOut(parsed.data, itemIds);
-  parsed.data = clean.data;
-  const assigned = itemIds.filter((id) => !clean.missing.includes(id));
-  const v = validateClusterOut(parsed.data, assigned);
-  if (!v.ok) return { query, ok: false, reason: v.reason, warnings: clean.warnings };
+  let parsed, clean, fail = null;
+  const retried = [];
+  for (let attempt = 1; attempt <= CLUSTER_ATTEMPTS; attempt++) {
+    const prompt = fail
+      ? `${basePrompt}\n\n[재시도] 직전 출력이 거부됐다: ${fail.reason}\n위 형식·허용 목록을 지켜 JSON 객체 하나만 다시 출력하라.`
+      : basePrompt;
+    parsed = llm.runJson(prompt,
+      { runLLM, requireKey: 'clusters', label: `cluster-${query}${attempt > 1 ? `-retry${attempt - 1}` : ''}`, agent, servers: ['batch'] });
+    if (!parsed.ok) { fail = { reason: parsed.reason }; retried.push(parsed.reason); continue; }
+    clean = sanitizeClusterOut(parsed.data, itemIds);
+    parsed.data = clean.data;
+    const v = validateClusterOut(parsed.data, itemIds.filter((id) => !clean.missing.includes(id)));
+    if (v.ok) { fail = null; break; }
+    fail = { reason: v.reason, warnings: clean.warnings };
+    retried.push(v.reason);
+  }
+  if (fail) return { query, ok: false, reason: `${fail.reason} (${CLUSTER_ATTEMPTS}회 시도)`, ...(fail.warnings ? { warnings: fail.warnings } : {}) };
 
   let created = 0, updated = 0, gaps = 0;
   const clusterIds = new Set(); // news_cluster 이벤트에 실어 보고서(event_ids)↔클러스터 연결의 근거로 쓴다
@@ -280,6 +290,7 @@ function clusterQuery(query, runLLM = llm.run, { agent = false } = {}) {
     cluster_ids: [...clusterIds],
     ...(reportNotes.length ? { report_notes: reportNotes.map((n) => n.report_id) } : {}),
     ...(parsed.repaired ? { repaired: true } : {}),
+    ...(retried.length ? { retried } : {}),
     ...(clean.warnings.length ? { warnings: clean.warnings } : {}),
   };
 }

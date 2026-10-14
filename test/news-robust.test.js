@@ -86,5 +86,23 @@ console.log('6. 클러스터 프롬프트에 enum 명시');
 const cp = news.buildClusterPrompt([], [], {});
 assert(cp.includes('[허용 국가 코드] KR') && cp.includes('[허용 구조 축] power_structure'), '허용 목록 명시');
 
+console.log('7. clusterQuery — 실패 시 거부 사유를 붙여 1회 재시도');
+{
+  const q2 = '한중 무역';
+  stmts.insertNewsItem.run({ link: 'https://x.com/r1', title: '재시도 기사', description: 'd', source: '기타', spectrum: 'unknown', pub_date: '2026-10-13T00:00:00Z', query: q2 });
+  const rid = db.prepare(`SELECT id FROM news_items WHERE link = 'https://x.com/r1'`).get().id;
+  const good = { clusters: [{ event_key: 'retry-case-2026-10', title: '재시도', member_ids: [rid], core_frame: 'f', countries: ['KR'], spectrum_frames: {}, notable_claims: [], structural_hypotheses: [] }], noise_ids: [] };
+  const bad = { clusters: [{ event_key: '!!', title: 'x', member_ids: [rid] }], noise_ids: [] };
+  const prompts = [];
+  let r2 = news.clusterQuery(q2, (input) => { prompts.push(input); return { ok: true, text: JSON.stringify(prompts.length === 1 ? bad : good) }; });
+  assert(r2.ok && r2.created === 1 && r2.retried?.length === 1, `검증 실패 → 재시도 성공 (reason: ${r2.reason || '-'})`);
+  assert(prompts[1].includes('[재시도]') && prompts[1].includes('event_key 형식'), '재시도 프롬프트에 거부 사유');
+
+  stmts.insertNewsItem.run({ link: 'https://x.com/r2', title: '계속 실패', description: 'd', source: '기타', spectrum: 'unknown', pub_date: '2026-10-13T00:00:00Z', query: q2 });
+  let calls = 0;
+  r2 = news.clusterQuery(q2, () => { calls++; return { ok: false, reason: 'timeout' }; });
+  assert(!r2.ok && calls === 2 && r2.reason.includes('2회 시도'), '호출 실패 2회 → 실패 보고(무한 재시도 없음)');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
