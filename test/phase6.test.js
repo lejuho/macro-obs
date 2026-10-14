@@ -27,8 +27,10 @@ console.log('2. 재료 수집 — 픽스처');
 const { id: indId } = stmts.upsertIndicator.get({
   source: 'ecos', source_code: 'T/d', name: '원/달러 환율', freq: 'D', unit: '원', category: 'macro', note: null,
 });
-stmts.upsertObs.run(indId, '2026-06-06', 1500);
-stmts.upsertObs.run(indId, '2026-07-05', 1554);
+// 기간 변화는 date('now','-30 day') 기준 — 30일 창 앞뒤로 하나씩 오늘 기준 상대 날짜로 둔다
+const daysAgo = (n) => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10);
+stmts.upsertObs.run(indId, daysAgo(40), 1500);
+stmts.upsertObs.run(indId, daysAgo(2), 1554);
 db.prepare(`INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, rationale)
   VALUES ('환율 뉴노멀 1350~1480', ?, 1350, 1480, '레벨시프트 가설')`).run(indId);
 const { id: alertId } = stmts.insertAlert.get({

@@ -24,7 +24,9 @@ const call = async (name, args) => {
 const { id: indId } = stmts.upsertIndicator.get({
   source: 'ecos', source_code: 'T/m', name: '원/달러 환율', freq: 'D', unit: '원', category: 'macro', note: '테스트 노브',
 });
-for (let i = 0; i < 5; i++) stmts.upsertObs.run(indId, `2026-07-0${i + 1}`, 1550 + i);
+// 날짜는 오늘 기준 상대값 — get_series의 days 창이 Date.now() 기준이라 고정 날짜는 시간이 지나면 창 밖으로 밀린다
+const daysAgo = (n) => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10);
+for (let i = 0; i < 5; i++) stmts.upsertObs.run(indId, daysAgo(5 - i), 1550 + i);
 db.prepare(`INSERT INTO hypotheses (statement, indicator_id, band_low, band_high, rationale)
   VALUES ('환율 뉴노멀', ?, 1450, 1600, 'r')`).run(indId);
 
