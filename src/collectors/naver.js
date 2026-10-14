@@ -37,8 +37,30 @@ function parseItems(json, query) {
   });
 }
 
-async function search(query, display = 50) {
-  const url = `https://openapi.naver.com/v1/search/news.json?query=${encodeURIComponent(query)}&display=${display}&sort=date`;
+// A/B 보강: 최신순 50건은 소형 매체가 대부분이라 축 양끝 기사가 거의 안 잡힌다.
+// 같은 쿼리로 더 깊은 최신순 페이지 + 관련도순을 훑어 A/B 매체 기사만 추가로 담는다.
+const BOOST = {
+  pages: [{ sort: 'date', start: 51 }, { sort: 'date', start: 151 }, { sort: 'sim', start: 1 }],
+  spectra: ['A', 'B'],
+  maxAgeHours: 72, // 오래된 기사는 지난 사건을 새 클러스터로 만들 수 있어 제외
+  cap: 30,         // 쿼리당 상한 — 클러스터링 LLM 입력량 보호
+};
+
+/** 순수: 보강 후보 → A/B·최근·중복 제거·최신순 상한 */
+function pickBoost(items, { now = Date.now(), seen = new Set() } = {}) {
+  const since = now - BOOST.maxAgeHours * 3600_000;
+  const out = [];
+  for (const it of items) {
+    if (!BOOST.spectra.includes(it.spectrum) || seen.has(it.link)) continue;
+    if (!it.pub_date || Date.parse(it.pub_date) < since) continue;
+    seen.add(it.link);
+    out.push(it);
+  }
+  return out.sort((a, b) => b.pub_date.localeCompare(a.pub_date)).slice(0, BOOST.cap);
+}
+
+async function search(query, display = 50, { sort = 'date', start = 1 } = {}) {
+  const url = `https://openapi.naver.com/v1/search/news.json?query=${encodeURIComponent(query)}&display=${display}&sort=${sort}&start=${start}`;
   const res = await fetch(url, {
     headers: { 'X-Naver-Client-Id': ID(), 'X-Naver-Client-Secret': SECRET() },
   });
@@ -52,14 +74,27 @@ async function collect() {
   for (const q of QUERIES) {
     try {
       const items = parseItems(await search(q.query), q.query);
-      let added = 0;
+      let extra = [], boostError = null;
+      try {
+        const pool = [];
+        for (const pg of BOOST.pages) {
+          await sleep(300);
+          pool.push(...parseItems(await search(q.query, 100, pg), q.query));
+        }
+        extra = pickBoost(pool, { seen: new Set(items.map((it) => it.link)) });
+      } catch (e) { boostError = e.message; } // 보강 실패는 본 수집을 막지 않는다
+      let added = 0, boosted = 0;
       tx(() => {
         for (const it of items) {
           const r = stmts.insertNewsItem.run(it);
           if (r.changes) added++;
         }
+        for (const it of extra) {
+          const r = stmts.insertNewsItem.run(it);
+          if (r.changes) boosted++;
+        }
       });
-      results.push({ query: q.query, fetched: items.length, added, ok: true });
+      results.push({ query: q.query, fetched: items.length, added, boosted, boostError, ok: true });
     } catch (e) {
       results.push({ query: q.query, ok: false, error: e.message });
     }
@@ -68,4 +103,4 @@ async function collect() {
   return results;
 }
 
-module.exports = { collect, search, parseItems, identifyPress };
+module.exports = { collect, search, parseItems, identifyPress, pickBoost, BOOST };

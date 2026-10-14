@@ -15,7 +15,9 @@ async function main() {
 
   // 1. 수집
   for (const r of await collect()) {
-    console.log(r.ok ? `  collect "${r.query}": +${r.added}/${r.fetched}` : `  collect "${r.query}": ${r.error}`);
+    console.log(r.ok
+      ? `  collect "${r.query}": +${r.added}/${r.fetched} · A/B 보강 +${r.boosted}${r.boostError ? ` (보강 실패: ${r.boostError})` : ''}`
+      : `  collect "${r.query}": ${r.error}`);
   }
 
   // 2. 클러스터+프레이밍 (쿼리당 claude 1콜)
