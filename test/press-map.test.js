@@ -16,6 +16,8 @@ assert(identifyPress('https://www.hankyung.com/a').spectrum === 'econ' && identi
 assert(identifyPress('https://www.kotra.or.kr/a').spectrum === 'official', 'KOTRA → official');
 assert(identifyPress('https://www.sisajournal.com/a').spectrum === 'unknown', '성향 평가가 엇갈리는 종합지는 unknown 유지');
 assert(identifyPress('https://www.sbs.co.kr/a').spectrum === 'wire', '민영 지상파는 통신·공영 축');
+assert(identifyPress('https://www.vop.co.kr/A0001').spectrum === 'B', '민중의소리 → B');
+assert(identifyPress('https://imnews.imbc.com/a').spectrum === 'wire', 'MBC는 공영방송이라 wire 유지');
 assert(identifyPress('https://nosuchpress.example/1').name === '기타', '미등록 → 기타');
 assert(Object.values(PRESS.DOMAINS).every((v) => v.spectrum in PRESS.AXIS), '모든 spectrum이 AXIS 라벨 안');
 

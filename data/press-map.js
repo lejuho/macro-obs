@@ -47,6 +47,11 @@ module.exports = {
     'jtbc.co.kr': { name: 'JTBC', spectrum: 'B' },
     'hankookilbo.com': { name: '한국일보', spectrum: 'B' },
     'seoul.co.kr': { name: '서울신문', spectrum: 'wire' },
+    // 2026-10-16 B 보강: 성향이 뚜렷한 진보 매체만 추가. 딴지(논평·커뮤니티)·내일신문(중도)은 제외, MBC는 공영방송이라 wire 유지
+    'vop.co.kr': { name: '민중의소리', spectrum: 'B' },
+    'newscham.net': { name: '참세상', spectrum: 'B' },
+    'sisain.co.kr': { name: '시사IN', spectrum: 'B' },
+    'newstapa.org': { name: '뉴스타파', spectrum: 'B' },
     'segye.com': { name: '세계일보', spectrum: 'A' },
     'kmib.co.kr': { name: '국민일보', spectrum: 'A' },
     'sedaily.com': { name: '서울경제', spectrum: 'econ' },
