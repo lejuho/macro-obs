@@ -19,6 +19,7 @@ const WRITE_TOOLS = [
       'statement는 사용자와 합의된 최종 문장이어야 한다: "1450~1520"(밴드) / "1500"(점→±2%) / 자유 서술.',
       '호출 전에 get_status로 알림 id와 현재값을 확인하고, 사용자에게 최종 문장을 되물어 확정받아라.',
     ].join(' '),
+    returns: '{prediction_id, origin, target_date, band([low,high]|null), note}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -61,6 +62,7 @@ const WRITE_TOOLS = [
       'rationale은 대화에서 나온 사용자의 논리를 재서술해 넣어라 (다음 이탈 알림에 그대로 뜬다).',
       '수정 전 get_status와 필요시 /hyp ctx에 해당하는 get_series로 분포를 확인·제시했는가?',
     ].join(' '),
+    returns: '{new_hypothesis_id, origin, old_band, new_band, note}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -101,6 +103,7 @@ const WRITE_TOOLS = [
       '사용자가 명시적으로 예약을 요청했을 때만. action_text는 흥분한 미래의 사용자가 그대로 실행할 수 있게',
       '대화에서 합의된 구체적 지시로 재서술하라. 조건의 지표 id는 list_indicators로 확인.',
     ].join(' '),
+    returns: '{trigger_id, conditions, note}',
     inputSchema: {
       type: 'object',
       properties: {

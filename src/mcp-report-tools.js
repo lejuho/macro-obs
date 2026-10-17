@@ -30,6 +30,7 @@ function reportTools(author = 'unknown') {
         '그러니 클러스터별 내용은 "### #<이벤트id> ..." 헤딩 아래에 적어라 — 해당 섹션만 발췌된다.',
         '저장 성공 응답을 받은 뒤에만 다음 폴링의 since_id를 until_id로 올려라.',
       ].join(' '),
+      returns: '{ok, report_id, until_id, warning?(이미 보고된 이벤트가 섞였을 때)}',
       inputSchema: {
         type: 'object',
         properties: {
@@ -65,6 +66,7 @@ function reportTools(author = 'unknown') {
     {
       name: 'get_reports',
       description: '저장된 분석 보고서 목록 (최신순). 새 보고서를 쓰기 전에 직전 보고서와 중복·모순이 없는지 확인할 때.',
+      returns: '{reports[{id,ts,author,title,body,event_ids,since_id,until_id,meta}]} — since_id를 주면 그 이후를 오래된 순으로',
       inputSchema: {
         type: 'object',
         properties: { limit: { type: 'integer', description: '기본 20, 최대 100' }, since_id: { type: 'integer' } },

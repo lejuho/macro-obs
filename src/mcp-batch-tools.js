@@ -20,6 +20,7 @@ const BATCH_TOOLS = [
   {
     name: 'search_report',
     description: '보고서 원문에서 키워드 등장 위치 탐색 (각 위치의 짧은 문맥 80자). 발췌에 없는 항목을 찾을 때 먼저 이걸로 위치를 확인하고 fetch_report_section으로 해당 구간을 가져와라.',
+    returns: '{keyword, total_found, hits[{pos,context}], report_length}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -41,7 +42,8 @@ const BATCH_TOOLS = [
   },
   {
     name: 'fetch_report_section',
-    description: '보고서 원문의 특정 위치(pos) 주변 구간을 가져온다. search_report로 찾은 pos를 넣어라. radius 기본 2000자, 최대 8000자.',
+    description: '보고서 원문의 특정 위치(pos) 주변 구간을 가져온다. search_report로 찾은 pos를 넣어라. radius 기본 2000자, 최대 4000자.',
+    returns: '{pos, section}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -60,6 +62,7 @@ const BATCH_TOOLS = [
   {
     name: 'search_news_live',
     description: '네이버 뉴스 실시간 검색 (메타·요약만, 본문 없음). 재방문 채점 시 "실제 전개" 근거가 부족하면 다른 키워드로 추가 검색하라.',
+    returns: '{query, items[{title,description,source,spectrum,pub_date}]}',
     inputSchema: {
       type: 'object',
       properties: {

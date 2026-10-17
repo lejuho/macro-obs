@@ -28,6 +28,7 @@ const TOOLS = [
   {
     name: 'get_status',
     description: '가설별 현재값 vs 밴드, open 알림, 채점 대기 예측, 다가오는 선거. 대화를 관측소의 현재 사실에 접지하는 기본 도구.',
+    returns: '{hypotheses[{id,statement,band_low,band_high,window_rule,rationale,indicator_id,indicator_name,unit,latest,latest_date,flags}], open_alerts[{id,observed_value,observed_date,direction,triggered_at,statement,indicator_name}], pending_predictions(채점 대기 수), watch[관찰 전용 지표 {id,name,unit,note,category,latest,latest_date,flags}], elections[{...,date,dday}], cycle(산업 사이클 스냅샷)}',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler() {
       const { api } = require('./jobs/server');
@@ -37,6 +38,7 @@ const TOOLS = [
   {
     name: 'list_indicators',
     description: '전체 지표 목록 (id, 이름, 최신값, 노브 문장). get_series의 지표 탐색용.',
+    returns: '[{id,source,name,unit,category,note,latest,latest_date}]',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler() {
       return db.prepare(`
@@ -49,6 +51,7 @@ const TOOLS = [
   {
     name: 'get_series',
     description: '지표 시계열 조회. indicator는 id 또는 이름 일부(예: "환율", "MOVE").',
+    returns: '{indicator(지표 행), observations[{date,value}] 날짜 오름차순}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -67,6 +70,7 @@ const TOOLS = [
   {
     name: 'list_scenarios',
     description: '사전계산된 테일 시나리오 12종 목록 (연관국, 트리거 힌트 포함).',
+    returns: '[{id,name,trigger_hint,countries,computed_at}]',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler() {
       return stmts.allScenarios.all().map((s) => ({
@@ -78,6 +82,7 @@ const TOOLS = [
   {
     name: 'run_scenario',
     description: '시나리오의 사전계산 전파 결과. 노드별 impact와 도달 경로의 간선 노트(왜/조건/지경학)까지. 경합(수혜·피해 공존) 노드는 경로가 나뉘어 나온다 — 지배 경로 판단은 사용자 몫이라는 전제로 제시할 것.',
+    returns: '{scenario{id,name,trigger_hint,shocks}, note, nodes[{name,type,max_abs,contested,paths[{impact,hops,edges[{route,kind,weight,hhi,why,condition,leverage}]}]}] max_abs 내림차순}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,6 +123,7 @@ const TOOLS = [
   {
     name: 'get_graph_node',
     description: '해도 노드의 유입/유출 간선 전부와 노트(경로/조건/지경학), HHI, 계절성. 특정 산업·흐름·초크포인트의 구조를 파악할 때.',
+    returns: '{node{...,meta}, outgoing[], incoming[] (간선: route,kind,sign,weight,hhi,why,condition,leverage), scenarios_hitting{시나리오명: 최대 impact}}',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', description: '노드 이름 일부' } },
@@ -147,6 +153,7 @@ const TOOLS = [
   {
     name: 'get_exposures',
     description: '공시(DART) 기반 기업 구조적 노출 순위. metric: fx(환율 국면 — 수출·외화부채) | rates(금리 국면 — 변동금리부채).',
+    returns: '{metric, note, firms[{name,stock_code,industry,export_ratio,fx_debt_ratio,float_rate_ratio,score}] score 내림차순}',
     inputSchema: {
       type: 'object',
       properties: {
@@ -166,6 +173,7 @@ const TOOLS = [
   {
     name: 'get_track',
     description: '캘리브레이션 트랙레코드(지표별 hit rate)와 최근 예측 타임라인. 사용자의 판단 이력을 참조할 때 — miss도 그대로 보여줄 것.',
+    returns: '{rows[{indicator_name,origin,score,n}] 채점 완료 집계, predictions[{id,statement,expected_low,expected_high,target_date,actual_value,score,committed_at,indicator_name}] 최신 200건, origin_summary[{origin,score,n}]}',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler() {
       const { api } = require('./jobs/server');
@@ -175,6 +183,7 @@ const TOOLS = [
   {
     name: 'search_news',
     description: '뉴스 이벤트 클러스터(축별 프레이밍 스냅샷 포함)와 언론사 트랙레코드. query 생략 시 최근 클러스터.',
+    returns: '{clusters[{id,event_key,title,query,first_seen,last_seen,status,countries_json,initial,revisit}] 최근 10개, press_track[{source,verdict,n}]} — initial/revisit은 null 또는 {spectrum_frames{A,B,wire,econ,official,unknown: 축별 프레임 문장|null}, core_frame, notable_claims, expected_development, country_codes, political_contexts}',
     inputSchema: {
       type: 'object',
       properties: { query: { type: 'string', description: '클러스터 제목 검색어 (선택)' } },
@@ -195,6 +204,7 @@ const TOOLS = [
   {
     name: 'get_events',
     description: '이벤트 로그: 텔레그램 알림(breach/trigger/grade/news_revisit/worldview_review/track_weekly/message)과 배치 갱신(news_cluster). since_id로 커서 폴링 — 응답의 next_since_id를 다음 호출에 넘길 것.',
+    returns: '{events[{id,ts,source,kind,text,data,delivered}], next_since_id} — since_id를 주면 오래된 순, 아니면 최신 순',
     inputSchema: {
       type: 'object',
       properties: {
@@ -211,6 +221,29 @@ const TOOLS = [
     },
   },
 ];
+
+// ── 사용 안내 (initialize.instructions) ──
+// 클라이언트가 연결 시 모델에게 넘겨주는 도구 흐름 안내. 노출된 도구 조합에 맞는 줄만 싣는다
+// (공개 터널은 읽기 3종만, 배치 서버는 해당 없음 → 안내 생략).
+const GUIDE_INTRO = 'macro-obs는 거시 관측소다: 가설 밴드·지표·시나리오 전파·뉴스 프레이밍을 사실과 사전계산으로 제공한다. 방향·수혜/피해 판단은 사용자 몫 — 결과의 note를 따를 것. 각 도구 설명 끝의 "반환:"이 응답 JSON 형태다.';
+const GUIDE = [
+  { needs: ['get_status'], text: '대화를 시작할 때 get_status로 현재 사실(가설 밴드 대비 현재값, open 알림, 다가오는 선거)부터 확인한다.' },
+  { needs: ['list_indicators', 'get_series'], text: '지표 id를 모르면 list_indicators → get_series(id 또는 이름 일부).' },
+  { needs: ['list_scenarios', 'run_scenario'], text: '시나리오는 list_scenarios → run_scenario. contested=true 노드는 경로를 합산하지 말고 갈래별로 제시한다.' },
+  { needs: ['get_graph_node'], text: '특정 산업·흐름·초크포인트의 구조는 get_graph_node(이름 일부).' },
+  { needs: ['search_news'], text: `search_news의 spectrum_frames 축: ${Object.entries(require('../data/press-map').AXIS).map(([k, v]) => `${k}(${v})`).join('·')}. null은 그 축 기사가 없었다는 뜻이지 중립이 아니다.` },
+  { needs: ['get_events'], text: 'get_events는 커서 폴링: 직전 응답의 next_since_id를 since_id로 넘긴다.' },
+  { needs: ['get_reports', 'get_events', 'save_report'], text: '보고서 루프: get_reports로 직전 보고서 확인 → get_events(since_id) → 분석 → save_report(event_ids 전부, since_id, until_id=next_since_id). 저장 성공 응답 뒤에만 커서를 올린다.' },
+  { needs: ['commit_prediction'], text: '쓰기 도구(commit_prediction·revise_hypothesis·add_trigger)는 사용자가 명시적으로 요청하고 최종 문장을 확인한 뒤에만 호출한다. 기록은 origin=assisted로 분리 집계된다.' },
+  { needs: [], text: '도구 오류는 isError 텍스트로 온다 — 메시지의 안내(예: "list_indicators로 확인")를 따른다.' },
+];
+function buildInstructions(toolset) {
+  const names = new Set(toolset.map((t) => t.name));
+  const lines = GUIDE.filter((g) => g.needs.length && g.needs.every((n) => names.has(n))).map((g) => g.text);
+  if (!lines.length) return null;
+  const tail = GUIDE.filter((g) => !g.needs.length).map((g) => g.text);
+  return [GUIDE_INTRO, ...lines, ...tail].map((l, i) => (i ? `- ${l}` : l)).join('\n');
+}
 
 // ── JSON-RPC 처리 (팩토리 — 1층/2층 서버가 공유) ──
 const err = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
@@ -231,16 +264,20 @@ async function rpcCore(msg, TOOLSET, SERVER_INFO) {
 
   try {
     if (method === 'initialize') {
+      const instructions = buildInstructions(TOOLSET);
       return { jsonrpc: '2.0', id, result: {
         protocolVersion: params.protocolVersion || PROTOCOL,
         capabilities: { tools: {} }, serverInfo: SERVER_INFO,
+        ...(instructions ? { instructions } : {}),
       } };
     }
     if (method.startsWith('notifications/')) return null;
     if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
     if (method === 'tools/list') {
       return { jsonrpc: '2.0', id, result: {
-        tools: TOOLSET.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+        tools: TOOLSET.map(({ name, description, returns, inputSchema }) => ({
+          name, description: returns ? `${description} 반환: ${returns}` : description, inputSchema,
+        })),
       } };
     }
     if (method === 'tools/call') {
@@ -265,4 +302,4 @@ async function rpcCore(msg, TOOLSET, SERVER_INFO) {
   }
 }
 
-module.exports = { handleRpc, createHandler, TOOLS, PROTOCOL };
+module.exports = { handleRpc, createHandler, buildInstructions, TOOLS, PROTOCOL };

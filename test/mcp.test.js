@@ -42,6 +42,12 @@ r = await rpc('tools/list');
 assert(r.result.tools.length === TOOLS.length, `도구 ${TOOLS.length}종 노출`);
 assert(r.result.tools.every((t) => t.name && t.description && t.inputSchema?.type === 'object'), '스키마 완비');
 assert(!r.result.tools.some((t) => t.handler), 'handler 미노출');
+assert(r.result.tools.every((t) => t.description.includes(' 반환: ') && !('returns' in t)), '반환 형태가 설명 끝에 붙음');
+const { buildInstructions } = require('../src/mcp');
+const ins = (await rpc('initialize', {})).result.instructions;
+assert(ins.includes('get_status') && ins.includes('run_scenario'), 'instructions: 전체 도구 흐름');
+const pubIns = buildInstructions(TOOLS.filter((t) => ['get_events', 'get_track', 'search_news'].includes(t.name)));
+assert(pubIns.includes('next_since_id') && !pubIns.includes('get_status로'), 'instructions: 노출 도구에 맞는 줄만');
 
 console.log('3. 도구 호출');
 let c = await call('get_status');

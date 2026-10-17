@@ -24,6 +24,7 @@ const call = async (name, args) => {
   console.log('1. 배치 서버 — 팩토리 분리');
   const init = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
   assert(init.result.serverInfo.name === 'macro-obs-batch', '별도 serverInfo');
+  assert(!('instructions' in init.result), '배치 서버는 사용 안내 생략');
   const list = await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   assert(list.result.tools.length === 3, '배치 도구 3종');
   assert(!list.result.tools.some((t) => t.name === 'get_status'), '1층 도구 미노출 (격리)');
