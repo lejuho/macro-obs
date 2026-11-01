@@ -115,6 +115,12 @@ function accessJwt(claims = {}) {
   assert(saved.ok && saved.report_id === 1 && saved.until_id === 2, '보고서 저장');
   const again = await call('save_report', { title: '중복', body: 'x', event_ids: [2] });
   assert(again.ok && /이미 보고서 #1/.test(again.warning), '중복 이벤트 경고');
+  const overlapRes = await (await rpc({ Authorization: `Bearer ${t2.access_token}` }, 'tools/call', { name: 'save_report', arguments: { title: '겹침', body: 'x', event_ids: [2], since_id: 1, until_id: 2 } })).json();
+  assert(overlapRes.result.isError && /보고서 #1/.test(overlapRes.result.content[0].text) && /latest_until_id=2/.test(overlapRes.result.content[0].text), '겹치는 루프 구간 → 거부 + 공유 커서 안내');
+  const rangeRes = await (await rpc({ Authorization: `Bearer ${t2.access_token}` }, 'tools/call', { name: 'save_report', arguments: { title: '범위 겹침', body: 'x', since_id: 0, until_id: 1 } })).json();
+  assert(rangeRes.result.isError, 'event_ids 없이 범위만 겹쳐도 거부');
+  const gr = await call('get_reports', {});
+  assert(gr.latest_until_id === 2, 'get_reports.latest_until_id');
   const row = db.prepare('SELECT author FROM reports WHERE id = 1').get();
   assert(row.author === 'oauth:TestAgent', 'author = OAuth 클라이언트명 (인자로 위조 불가)');
   const errRes = await (await rpc({ Authorization: `Bearer ${t2.access_token}` }, 'tools/call', { name: 'save_report', arguments: { title: '' , body: 'x' } })).json();

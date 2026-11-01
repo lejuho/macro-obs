@@ -243,7 +243,7 @@ const GUIDE = [
   { needs: ['search_news'], text: `search_news의 spectrum_frames 축: ${Object.entries(require('../data/press-map').AXIS).map(([k, v]) => `${k}(${v})`).join('·')}. null은 그 축 기사가 없었다는 뜻이지 중립이 아니다.` },
   { needs: ['get_events'], text: 'get_events는 커서 폴링: 직전 응답의 next_since_id를 since_id로 넘긴다.' },
   { needs: ['get_events', 'search_news'], text: 'news_cluster 이벤트의 data.cluster_ids는 search_news(ids=[...])로 조회한다 — query 검색·최근 10개에는 없을 수 있다.' },
-  { needs: ['get_reports', 'get_events', 'save_report'], text: '보고서 루프: get_reports로 직전 보고서 확인 → get_events(since_id) → 분석 → save_report(event_ids 전부, since_id, until_id=next_since_id). 저장 성공 응답 뒤에만 커서를 올린다.' },
+  { needs: ['get_reports', 'get_events', 'save_report'], text: '보고서 루프: get_reports로 직전 보고서와 latest_until_id(작성자 무관 공유 커서) 확인 → get_events(since_id=latest_until_id) → 분석 → save_report(event_ids 전부, since_id, until_id=next_since_id). 저장 성공 응답 뒤에만 커서를 올린다.' },
   { needs: ['commit_prediction'], text: '쓰기 도구(commit_prediction·revise_hypothesis·add_trigger)는 사용자가 명시적으로 요청하고 최종 문장을 확인한 뒤에만 호출한다. 기록은 origin=assisted로 분리 집계된다.' },
   { needs: [], text: '도구 오류는 isError 텍스트로 온다 — 메시지의 안내(예: "list_indicators로 확인")를 따른다.' },
 ];
