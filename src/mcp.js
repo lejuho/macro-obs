@@ -182,15 +182,23 @@ const TOOLS = [
   },
   {
     name: 'search_news',
-    description: '뉴스 이벤트 클러스터(축별 프레이밍 스냅샷 포함)와 언론사 트랙레코드. query 생략 시 최근 클러스터.',
-    returns: '{clusters[{id,event_key,title,query,first_seen,last_seen,status,countries_json,initial,revisit}] 최근 10개, press_track[{source,verdict,n}]} — initial/revisit은 null 또는 {spectrum_frames{A,B,wire,econ,official,unknown: 축별 프레임 문장|null}, core_frame, notable_claims, expected_development, country_codes, political_contexts}',
+    description: '뉴스 이벤트 클러스터(축별 프레이밍 스냅샷 포함)와 언론사 트랙레코드. get_events의 news_cluster 이벤트에 나온 cluster_ids는 ids로 직접 조회. 둘 다 생략 시 최근 클러스터.',
+    returns: '{clusters[{id,event_key,title,query,first_seen,last_seen,status,countries_json,initial,revisit}] ids 지정 시 해당 클러스터 전부(없는 id는 missing_ids), 아니면 최근 10개, press_track[{source,verdict,n}]} — initial/revisit은 null 또는 {spectrum_frames{A,B,wire,econ,official,unknown: 축별 프레임 문장|null}, core_frame, notable_claims, expected_development, country_codes, political_contexts}',
     inputSchema: {
       type: 'object',
-      properties: { query: { type: 'string', description: '클러스터 제목 검색어 (선택)' } },
+      properties: {
+        query: { type: 'string', description: '클러스터 제목 검색어 (선택)' },
+        ids: { type: 'array', items: { type: 'integer' }, maxItems: 50, description: '클러스터 id 목록 (선택, query보다 우선)' },
+      },
       additionalProperties: false,
     },
-    handler({ query } = {}) {
-      const clusters = (query
+    handler({ query, ids } = {}) {
+      const byId = Array.isArray(ids) && ids.length
+        ? [...new Set(ids.map(Number))].slice(0, 50).map((id) => db.prepare(`SELECT * FROM news_clusters WHERE id = ?`).get(id) || id)
+        : null;
+      const clusters = (byId
+        ? byId.filter((c) => typeof c === 'object')
+        : query
         ? db.prepare(`SELECT * FROM news_clusters WHERE title LIKE ? ORDER BY last_seen DESC LIMIT 10`).all(`%${query}%`)
         : db.prepare(`SELECT * FROM news_clusters ORDER BY last_seen DESC LIMIT 10`).all()
       ).map((c) => ({
@@ -198,7 +206,8 @@ const TOOLS = [
         initial: JSON.parse(stmts.snapshotFor.get(c.id, 'initial')?.content_json || 'null'),
         revisit: JSON.parse(stmts.snapshotFor.get(c.id, 'revisit')?.content_json || 'null'),
       }));
-      return { clusters, press_track: stmts.pressTrackAgg.all() };
+      const missing_ids = byId ? byId.filter((c) => typeof c === 'number') : undefined;
+      return { clusters, ...(missing_ids?.length ? { missing_ids } : {}), press_track: stmts.pressTrackAgg.all() };
     },
   },
   {
@@ -233,6 +242,7 @@ const GUIDE = [
   { needs: ['get_graph_node'], text: '특정 산업·흐름·초크포인트의 구조는 get_graph_node(이름 일부).' },
   { needs: ['search_news'], text: `search_news의 spectrum_frames 축: ${Object.entries(require('../data/press-map').AXIS).map(([k, v]) => `${k}(${v})`).join('·')}. null은 그 축 기사가 없었다는 뜻이지 중립이 아니다.` },
   { needs: ['get_events'], text: 'get_events는 커서 폴링: 직전 응답의 next_since_id를 since_id로 넘긴다.' },
+  { needs: ['get_events', 'search_news'], text: 'news_cluster 이벤트의 data.cluster_ids는 search_news(ids=[...])로 조회한다 — query 검색·최근 10개에는 없을 수 있다.' },
   { needs: ['get_reports', 'get_events', 'save_report'], text: '보고서 루프: get_reports로 직전 보고서 확인 → get_events(since_id) → 분석 → save_report(event_ids 전부, since_id, until_id=next_since_id). 저장 성공 응답 뒤에만 커서를 올린다.' },
   { needs: ['commit_prediction'], text: '쓰기 도구(commit_prediction·revise_hypothesis·add_trigger)는 사용자가 명시적으로 요청하고 최종 문장을 확인한 뒤에만 호출한다. 기록은 origin=assisted로 분리 집계된다.' },
   { needs: [], text: '도구 오류는 isError 텍스트로 온다 — 메시지의 안내(예: "list_indicators로 확인")를 따른다.' },
